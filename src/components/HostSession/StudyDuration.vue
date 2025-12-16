@@ -20,13 +20,13 @@ const emit = defineEmits([
 
 <template>
   <div class="mt-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2 text-sm font-medium">
-        <span class="inline-flex h-4 w-4 items-center justify-center rounded-full">
-          <ClockIcon class="text-black" />
-        </span>
-        <span>Study Duration</span>
-      </div>
+    <div class="">
+    <div class="mb-3 flex items-center gap-2">
+      <span class="text-black/70">
+           <ClockIcon class="text-black" />
+      </span>
+      <h3 class="text-sm font-semibold">Study Duration</h3>
+    </div>
       <div class="flex items-center gap-2 rounded-xl bg-black/5 px-3 py-2">
         <select
           :value="hours"
