@@ -20,7 +20,6 @@ export const useSessionStore = defineStore("session", {
   if (!this.byId[id]) return
   this.byId[id] = { ...this.byId[id], todos }
 },
-
     updateInvitedFriendIds(id, invitedFriendIds) {
   if (!this.byId[id]) return
   this.byId[id] = { ...this.byId[id], invitedFriendIds }
