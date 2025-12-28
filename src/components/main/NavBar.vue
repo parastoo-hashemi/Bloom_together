@@ -15,7 +15,7 @@ const isActive = (to) => route.path === to
 </script>
 
 <template>
-  <nav class="fixed bottom-0 left-0 right-0 z-[9999] border-t bg-white">
+  <nav class="fixed bottom-0 left-0 right-0 z-[50] border-t bg-white">
     <div class="mx-auto max-w px-6">
       <div class="flex items-center justify-around py-3 text-[11px]">
         <button

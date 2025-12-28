@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import ArrowLeft from "@/components/icons/ArrowLeft.vue"
+import AddPeopleIcon from "@/components/icons/AddPeopleIcon.vue"
 
 const props = defineProps({
   open: { type: Boolean, default: false },              // v-model:open
@@ -99,7 +100,10 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown))
 
 <template>
   <teleport to="body">
-    <div v-if="open" class="fixed inset-0 z-[9999] bg-white">
+    <div v-if="open" class="fixed inset-0 z-[9999]">
+      <!-- overlay -->
+      <div class="absolute inset-0 bg-black/40" @click="close"></div>
+      <div class="absolute right-0 top-0 h-full w-[78%] max-w-[360px] bg-white shadow-2xl">
       <!-- top bar -->
       <div class="flex items-center gap-2 border-b px-4 py-3">
         <button class="grid h-10 w-10 place-items-center rounded-full hover:bg-black/5" @click="close" aria-label="Back">
@@ -117,10 +121,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown))
             @click="toggleDropdown"
           >
             <span class="flex items-center gap-2">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M15 19c-3.314 0-6-2.686-6-6s2.686-6 6-6 6 2.686 6 6-2.686 6-6 6Z" stroke="currentColor" stroke-width="2"/>
-                <path d="M4 4v6M1 7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              </svg>
+              <AddPeopleIcon class="h-6 w-6"/>
               Select friends
             </span>
             <span class="text-black/50">Invited ({{ invitedCount }})</span>
@@ -198,6 +199,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown))
             </button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   </teleport>

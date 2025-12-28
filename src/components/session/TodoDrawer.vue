@@ -1,26 +1,84 @@
 <script setup>
-import { ref, watch } from "vue"
+import { computed, ref, watch } from "vue"
+import ArrowLeft from "@/components/icons/ArrowLeft.vue"
 import TodoAddRow from "@/components/session/TodoAddRow.vue"
+import TodoListPanel from "@/components/session/TodoListPanel.vue"
+import AiTodoPanel from "@/components/session/AiTodoPanel.vue"
 
+const aiTodos = ref([]) 
+
+// Props
 const props = defineProps({
-  open: { type: Boolean, default: false },     // v-model:open
-  todos: { type: Array, default: () => [] },   // [{id, text, done?}]
+  open: { type: Boolean, default: false },              // v-model:open
+  mode: { type: String, default: "manual" },            // v-model:mode ("manual" | "ai")
+  isAdmin: { type: Boolean, default: false },
+
+  // Two scopes (so you can support "Session" + "Individual")
+  sessionTodos: { type: Array, default: () => [] },     // shared tasks
+  personalTodos: { type: Array, default: () => [] },    // user-only tasks
 })
 
-const emit = defineEmits(["update:open", "update:todos"])
+// Emits
+const emit = defineEmits([
+  "update:open",
+  "update:mode",
+  "update:sessionTodos",
+  "update:personalTodos",
+])
 
-const localTodos = ref([])
+// Manual sub-tab: only meaningful for admin (Session vs Individual)
+const manualScope = ref("session") // "session" | "personal"
+
+// local copies (avoid mutating props)
+const localSessionTodos = ref([])
+const localPersonalTodos = ref([])
 
 watch(
-  () => props.todos,
-  (v) => {
-    localTodos.value = (v || []).map((x) => ({ ...x, done: !!x.done }))
-  },
+  () => props.sessionTodos,
+  (v) => (localSessionTodos.value = normalize(v)),
   { immediate: true }
 )
 
+watch(
+  () => props.personalTodos,
+  (v) => (localPersonalTodos.value = normalize(v)),
+  { immediate: true }
+)
+
+function normalize(v) {
+  return (v || []).map((x) => ({
+    id: x.id ?? String(Date.now()),
+    text: String(x.text ?? ""),
+    done: !!x.done,
+  }))
+}
+
 function close() {
   emit("update:open", false)
+}
+
+function setMode(next) {
+  emit("update:mode", next)
+}
+
+const activeTodos = computed(() => {
+  // Manual tab:
+  // - admin can choose session vs personal
+  // - non-admin always sees personal only (cleanest rule)
+  if (props.mode !== "manual") return []
+  if (props.isAdmin) return manualScope.value === "session" ? localSessionTodos.value : localPersonalTodos.value
+  return localPersonalTodos.value
+})
+
+function commitTodos(next) {
+  if (props.mode !== "manual") return
+
+  if (props.isAdmin) {
+    if (manualScope.value === "session") emit("update:sessionTodos", next)
+    else emit("update:personalTodos", next)
+  } else {
+    emit("update:personalTodos", next)
+  }
 }
 
 function addTask(text) {
@@ -31,81 +89,105 @@ function addTask(text) {
     text: t,
     done: false,
   }
-  localTodos.value = [item, ...localTodos.value]
-  emit("update:todos", localTodos.value)
+
+  const next = [item, ...activeTodos.value]
+  // update local
+  if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
+  else localPersonalTodos.value = next
+
+  commitTodos(next)
 }
 
 function toggleDone(id) {
-  localTodos.value = localTodos.value.map((x) =>
-    x.id === id ? { ...x, done: !x.done } : x
-  )
-  emit("update:todos", localTodos.value)
+  const next = activeTodos.value.map((x) => (x.id === id ? { ...x, done: !x.done } : x))
+
+  if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
+  else localPersonalTodos.value = next
+
+  commitTodos(next)
 }
 
 function removeTask(id) {
-  localTodos.value = localTodos.value.filter((x) => x.id !== id)
-  emit("update:todos", localTodos.value)
+  const next = activeTodos.value.filter((x) => x.id !== id)
+
+  if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
+  else localPersonalTodos.value = next
+
+  commitTodos(next)
 }
 </script>
 
 <template>
   <teleport to="body">
     <div v-if="open" class="fixed inset-0 z-[9999]">
-      <!-- overlay -->
-      <div class="absolute inset-0 bg-black/40" @click="close"></div>
-
-      <!-- right drawer -->
-      <div class="absolute right-0 top-0 h-full w-[78%] max-w-[360px] bg-white shadow-2xl">
+      <div class="absolute inset-0 bg-black/40" @click="close" />
+      <div
+        class="absolute right-0 top-0 h-full w-full bg-white"
+        @click.stop
+      >
         <div class="flex items-center justify-between border-b px-4 py-4">
-          <div class="text-sm font-extrabold tracking-wide">MY TO-DO</div>
           <button
-            class="grid h-9 w-9 place-items-center rounded-full hover:bg-black/5"
+            class="grid h-9 w-9 place-items-center rounded-full hover:bg-black/5 active:scale-95"
             @click="close"
-            aria-label="Close"
+            aria-label="Back"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
+            <ArrowLeft />
           </button>
+          <div class="text-base font-semibold">To-do list</div>
+          <div class="h-9 w-9" />
+        </div>
+        <div class="px-4 pt-3">
+          <div class="flex rounded-full bg-black/5 p-1">
+            <button
+              class="flex-1 rounded-full py-2 text-sm font-medium"
+              :class="mode === 'manual' ? 'bg-[#111] text-white' : 'text-black/70'"
+              @click="setMode('manual')"
+            >
+              Manual
+            </button>
+            <button
+              class="flex-1 rounded-full py-2 text-sm font-medium"
+              :class="mode === 'ai' ? 'bg-[#111] text-white' : 'text-black/70'"
+              @click="setMode('ai')"
+            >
+              ✨ AI
+            </button>
+          </div>
+
+          <div v-if="mode === 'manual' && isAdmin" class="mt-3 flex gap-2">
+            <button
+              class="flex-1 rounded-full border py-2 text-xs font-semibold"
+              :class="manualScope === 'session' ? 'bg-[#111] text-white border-transparent' : 'bg-white text-black/70'"
+              @click="manualScope = 'session'"
+            >
+              Session
+            </button>
+
+            <button
+              class="flex-1 rounded-full border py-2 text-xs font-semibold"
+              :class="manualScope === 'personal' ? 'bg-[#111] text-white border-transparent' : 'bg-white text-black/70'"
+              @click="manualScope = 'personal'"
+            >
+              Individual
+            </button>
+          </div>
         </div>
 
-        <div class="p-4">
-          <TodoAddRow @add="addTask" />
+        <div class="px-4 pb-6 pt-4">
+          <div v-if="mode === 'manual'">
+            <TodoAddRow @add="addTask" />
 
-          <div class="mt-4 space-y-2">
-            <div
-              v-for="t in localTodos"
-              :key="t.id"
-              class="flex items-center justify-between rounded-xl bg-black/5 px-3 py-2"
-            >
-              <button
-                class="mr-3 grid h-6 w-6 place-items-center rounded-md bg-white ring-1 ring-black/20"
-                @click="toggleDone(t.id)"
-                aria-label="Toggle done"
-              >
-                <svg v-if="t.done" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                  <path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
+            <TodoListPanel
+              class="mt-4"
+              :todos="activeTodos"
+              @toggle="toggleDone"
+              @remove="removeTask"
+            />
+          </div>
 
-              <p class="flex-1 text-sm" :class="t.done ? 'text-black/50 line-through' : 'text-black/80'">
-                {{ t.text }}
-              </p>
-
-              <button
-                class="ml-3 grid h-7 w-7 place-items-center rounded-full bg-white/70 hover:bg-white"
-                @click="removeTask(t.id)"
-                aria-label="Remove"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-              </button>
-            </div>
-
-            <div v-if="!localTodos.length" class="text-sm text-black/40">
-              No tasks yet.
-            </div>
+          <!-- AI (placeholder for your next message UI) -->
+         <div v-else class="mt-4">
+              <AiTodoPanel v-model:todos="aiTodos" />
           </div>
         </div>
       </div>

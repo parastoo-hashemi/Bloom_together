@@ -6,10 +6,20 @@ const props = defineProps({
   autoStart: { type: Boolean, default: true },
 })
 
+/**
+ * Events:
+ * - tick(payload): fires every second while running
+ * - expired(payload): fires once when it reaches 0
+ */
 const emit = defineEmits(["expired", "tick"])
 
+const total = ref(0)
 const remaining = ref(0)
+
 let t = null
+let expiredEmitted = false
+
+const elapsed = computed(() => Math.max(0, total.value - remaining.value))
 
 const hh = computed(() => String(Math.floor(remaining.value / 3600)).padStart(2, "0"))
 const mm = computed(() => String(Math.floor((remaining.value % 3600) / 60)).padStart(2, "0"))
@@ -20,23 +30,60 @@ function stop() {
   t = null
 }
 
+function emitTick() {
+  const payload = {
+    remainingSec: remaining.value,
+    elapsedSec: elapsed.value,
+    totalSec: total.value,
+  }
+  emit("tick", payload)
+}
+
+function emitExpiredOnce() {
+  if (expiredEmitted) return
+  expiredEmitted = true
+  const payload = {
+    remainingSec: 0,
+    elapsedSec: total.value,
+    totalSec: total.value,
+  }
+  emit("expired", payload)
+}
+
 function start() {
   if (t) return
+  // If already at 0, expire immediately (don’t start an interval)
+  if (remaining.value <= 0) {
+    stop()
+    emitExpiredOnce()
+    return
+  }
+
   t = setInterval(() => {
-    if (remaining.value <= 0) {
+    // Decrement first → when it hits 0, expire immediately (no 1-second lag)
+    remaining.value = Math.max(0, remaining.value - 1)
+    emitTick()
+
+    if (remaining.value === 0) {
       stop()
-      emit("expired")
-      return
+      emitExpiredOnce()
     }
-    remaining.value -= 1
-    emit("tick", remaining.value)
   }, 1000)
 }
 
 function reset(seconds) {
   stop()
-  remaining.value = Math.max(0, Number(seconds) || 0)
+  expiredEmitted = false
+
+  const s = Math.max(0, Number(seconds) || 0)
+  total.value = s
+  remaining.value = s
+
+  // Emit an initial tick so parent can render elapsed/remaining immediately
+  emitTick()
+
   if (props.autoStart && remaining.value > 0) start()
+  if (remaining.value === 0) emitExpiredOnce()
 }
 
 watch(() => props.durationSec, (v) => reset(v), { immediate: true })
