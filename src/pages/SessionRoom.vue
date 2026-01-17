@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { useSessionStore } from "@/stores/session"
+import { useUserStore } from "@/stores/user" // ✅ added
+import NavBar from "../components/main/NavBar.vue" // ✅ added
 
 import SessionTimer from "@/components/session/SessionTimer.vue"
 import FlowerGrowth from "@/components/session/FlowerGrowth.vue"
@@ -15,6 +17,8 @@ import { clamp01 } from "@/utils/flowerGrowth"
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
+const userStore = useUserStore() // ✅ added
+
 const sessionEnded = ref(false)
 const sessionId = computed(() => route.params.id)
 const session = computed(() => sessionStore.getSession(sessionId.value))
@@ -66,8 +70,14 @@ const personalTodos = computed({
   },
 })
 
-// Redirect if invalid session
-onMounted(() => {
+// ✅ Redirect if invalid session + ✅ login guard added (without deleting your logic)
+onMounted(async () => {
+  await userStore.restoreLogin()
+  if (!userStore.isLoggedIn) {
+    router.replace({ name: "home" })
+    return
+  }
+
   if (!session.value) router.replace("/host")
 })
 
@@ -82,17 +92,11 @@ watch(
   { immediate: true }
 )
 
-// ⚠️ You likely don’t need these two deep watches anymore because computed setters already persist.
-// Keeping them may double-write. Consider deleting them.
-// watch(sessionTodos, ...)
-// watch(personalTodos, ...)
-
 // Derived values
 const durationSec = computed(() => {
   const s = session.value
   if (!s) return 0
   return (s.duration?.hours ?? 0) * 3600 + (s.duration?.minutes ?? 0) * 60
-  // return 40
 })
 
 const timerPayload = ref({ remainingSec: 0, elapsedSec: 0, totalSec: 0 })
@@ -102,11 +106,11 @@ const progress01 = computed(() => lastProgress01.value)
 const expiredHandled = ref(false)
 
 function onTimerTick(payload) {
-   if (freezeTimer.value) return
-   timerPayload.value = payload
-   const total = payload?.totalSec ?? 0
-   const elapsed = payload?.elapsedSec ?? 0
-   lastProgress01.value = total > 0 ? clamp01(elapsed / total) : 0
+  if (freezeTimer.value) return
+  timerPayload.value = payload
+  const total = payload?.totalSec ?? 0
+  const elapsed = payload?.elapsedSec ?? 0
+  lastProgress01.value = total > 0 ? clamp01(elapsed / total) : 0
 }
 
 function onTimerExpired(payload) {
@@ -141,7 +145,6 @@ const timerStatsText = computed(() => {
   return `${fmt(p.elapsedSec)} / ${fmt(p.totalSec)}`
 })
 
-
 const invitedIds = computed(() => session.value?.invitedFriendIds ?? [])
 
 // ✅ Define what “done” means (assumes todo item has `done` or `completed`)
@@ -156,7 +159,7 @@ const allTodosDone = computed(() => {
   const a = sessionTodos.value ?? []
   const b = personalTodos.value ?? []
   const all = [...a, ...b]
-  if (all.length === 0) return true // decide: empty list means “nothing to do” => success
+  if (all.length === 0) return true
   return all.every(isTodoDone)
 })
 
@@ -183,7 +186,6 @@ function onSendUsername(username) {
 
 // User taps "End The Session"
 function onEndSessionClick() {
-  // If time is already up -> if tasks not done => screen 3, else screen 1 (you can decide)
   if (timeUp.value && !allTodosDone.value) {
     endScreen.value = 3
   } else if (allTodosDone.value) {
@@ -193,13 +195,14 @@ function onEndSessionClick() {
   }
   endModalOpen.value = true
 }
+
 function endSessionNow() {
   sessionEnded.value = true
-  // Also: persist end state in store if you have it
 }
+
 // User confirms early exit with unfinished todos
 function confirmEarlyExit() {
-   endSessionNow()
+  endSessionNow()
   endScreen.value = 3
   endModalOpen.value = true
 }
@@ -211,18 +214,30 @@ function onTimerFinished() {
     endScreen.value = 3
     endModalOpen.value = true
   }
-  // If allTodosDone === true when time ends, you can either:
-  // - do nothing, or
-  // - show screen 1 automatically.
+}
+
+// ✅ NEW: give flower if session ended successfully (screen 1) and then user goes home
+async function awardFlowerIfSuccess() {
+  if (!userStore.currentUser) return
+  if (endScreen.value !== 1) return
+
+  try {
+    const current = Number(userStore.currentUser.flowers ?? 0)
+    await userStore.updateCurrentUser({ flowers: current + 1 })
+  } catch (e) {
+    console.warn("Failed to update flowers:", e)
+  }
 }
 
 // Navigate out after “Home Page” / close modal action
-function goHome() {
+async function goHome() {
+  // if success screen, update flowers
+  await awardFlowerIfSuccess()
+
   endModalOpen.value = false
-  router.push("/host") // adjust route as needed
+  router.push("/host")
 }
 </script>
-
 
 <template>
   <div class="min-h-screen bg-white">
@@ -231,7 +246,7 @@ function goHome() {
         <div class="text-lg font-semibold">{{ session?.topic || "Session" }}</div>
         <div v-if="session?.privacy === 'private'" class="ml-1 text-xs text-black/40">
           ( Session Admin )
-        </div>  
+        </div>
       </div>
 
       <button
@@ -255,6 +270,7 @@ function goHome() {
           :duration-sec="durationSec"
           @expired="onTimerExpired"
           @tick="onTimerTick"
+          @finished="onTimerFinished"
         />
       </div>
 
@@ -265,13 +281,13 @@ function goHome() {
         To-Do List
       </button>
 
-      <button  
-        @click="onEndSessionClick" 
+      <button
+        @click="onEndSessionClick"
         class="mt-3 mb-4 w-full rounded-2xl bg-black py-3 text-sm font-semibold text-white"
       >
         End The Session
       </button>
-      
+
       <FriendsProgressFlowers
         title="Online Members"
         :friends="friends"
@@ -297,13 +313,16 @@ function goHome() {
     />
 
     <EndSessionModal
-    :open="endModalOpen"
-    :screen="endScreen"
-    :title="session?.topic || 'Session'"
-    :stats-text="timerStatsText"
-    @close="endModalOpen = false"
-    @confirmEnd="confirmEarlyExit"
-    @goHome="goHome"
+      :open="endModalOpen"
+      :screen="endScreen"
+      :title="session?.topic || 'Session'"
+      :stats-text="timerStatsText"
+      @close="endModalOpen = false"
+      @confirmEnd="confirmEarlyExit"
+      @goHome="goHome"
     />
+
+    <!-- ✅ add navbar (logout + navigation) -->
+    <NavBar />
   </div>
 </template>

@@ -1,17 +1,28 @@
 <script setup>
-import { computed } from "vue"
 import { useRoute, useRouter } from "vue-router"
+import { useUserStore } from "@/stores/user"
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 
 const items = [
-  { label: "Home", to: "/" , key: "home", icon: "home" },
-  { label: "Invitation", to: "/invitation", key: "invitation", icon: "mail" }, // change to your real path
-  { label: "Garden", to: "/garden", key: "garden", icon: "plant" },            // change to your real path
+  { label: "Home", to: "/host", key: "home", icon: "home" },
+  { label: "Sessions", to: "/sessions", key: "sessions", icon: "mail" },
+  { label: "About", to: "/about", key: "about", icon: "plant" },
+  { label: "Logout", to: null, key: "logout", icon: "logout" },
 ]
 
-const isActive = (to) => route.path === to
+const isActive = (to) => (to ? route.path === to : false)
+
+function onClickItem(it) {
+  if (it.key === "logout") {
+    userStore.logout()
+    router.replace("/")
+    return
+  }
+  if (it.to) router.push(it.to)
+}
 </script>
 
 <template>
@@ -24,7 +35,7 @@ const isActive = (to) => route.path === to
           type="button"
           class="relative flex w-20 flex-col items-center gap-1"
           :class="isActive(it.to) ? 'text-black' : 'text-black/50'"
-          @click="router.push(it.to)"
+          @click="onClickItem(it)"
         >
           <!-- icon -->
           <span class="block">
@@ -40,16 +51,23 @@ const isActive = (to) => route.path === to
               <path d="m4 8 8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
             </svg>
 
-            <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <svg v-else-if="it.icon === 'plant'" width="22" height="22" viewBox="0 0 24 24" fill="none">
               <path d="M12 21c5-3 8-7 8-11a5 5 0 0 0-8-4 5 5 0 0 0-8 4c0 4 3 8 8 11Z"
                     stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
               <path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+
+            <!-- ✅ logout icon -->
+            <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M10 7V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-1"
+                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M15 12H3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="m6 9-3 3 3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </span>
 
           <span class="leading-none">{{ it.label }}</span>
 
-          <!-- active underline like iOS -->
           <span
             v-if="isActive(it.to)"
             class="absolute -bottom-2 h-[4px] w-10 rounded-full bg-black"
