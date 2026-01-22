@@ -91,8 +91,8 @@ watch(
 const durationSec = computed(() => {
   const s = session.value
   if (!s) return 0
-  return (s.duration?.hours ?? 0) * 3600 + (s.duration?.minutes ?? 0) * 60
-  // return 40
+  // return (s.duration?.hours ?? 0) * 3600 + (s.duration?.minutes ?? 0) * 60
+  return 40
 })
 
 const timerPayload = ref({ remainingSec: 0, elapsedSec: 0, totalSec: 0 })
@@ -246,7 +246,7 @@ function goHome() {
 
     <div class="mx-auto max-w px-4 pb-24 pt-8">
       <div class="flex justify-center">
-        <FlowerGrowth :progress="progress01" :size="250" :stroke-scale="1" />
+        <FlowerGrowth :progress="progress01" :size="250" />
       </div>
 
       <div class="mt-6">
