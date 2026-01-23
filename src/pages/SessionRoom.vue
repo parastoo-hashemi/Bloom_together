@@ -326,3 +326,4 @@ async function goHome() {
     <NavBar />
   </div>
 </template>
+
