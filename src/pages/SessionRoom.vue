@@ -92,7 +92,7 @@ const durationSec = computed(() => {
   const s = session.value
   if (!s) return 0
   // return (s.duration?.hours ?? 0) * 3600 + (s.duration?.minutes ?? 0) * 60
-  return 40
+  return 60
 })
 
 const timerPayload = ref({ remainingSec: 0, elapsedSec: 0, totalSec: 0 })
