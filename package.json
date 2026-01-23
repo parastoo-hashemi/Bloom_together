@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "better-sqlite3": "^12.6.0",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
     "pinia": "^3.0.4",
     "vue": "^3.5.24",
     "vue-router": "^4.6.4"
@@ -22,5 +25,18 @@
   },
   "overrides": {
     "vite": "npm:rolldown-vite@7.2.5"
-  }
+  },
+  "description": "This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.",
+  "main": "postcss.config.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://josephfayyaz@github.com/parastoo-hashemi/Bloom_together.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/parastoo-hashemi/Bloom_together/issues"
+  },
+  "homepage": "https://github.com/parastoo-hashemi/Bloom_together#readme"
 }

@@ -1,6 +1,8 @@
 <script setup>
-import { computed, ref } from "vue"
+import { computed, ref, onMounted } from "vue"
 import { useRouter } from "vue-router"
+
+import { useUserStore } from "@/stores/user"
 
 import Header from "../components/main/Header.vue"
 import NavBar from "../components/main/NavBar.vue"
@@ -9,6 +11,13 @@ import FilterBar from "../components/AvailableSessions/FilterBar.vue"
 import ConfirmStartModal from "@/components/HostSession/ConfirmStartModal.vue"
 
 const router = useRouter()
+const userStore = useUserStore()
+
+// ✅ login guard (minimal)
+onMounted(async () => {
+  await userStore.restoreLogin()
+  if (!userStore.isLoggedIn) router.replace({ name: "home" })
+})
 
 // Filter states
 const durationFilter = ref("all") // "all" | "30" | "60" | "120"
@@ -31,37 +40,31 @@ const filteredSessions = computed(() => {
     return okName && okDur
   })
 })
+
 const startModalOpen = ref(false)
+
 function enterSession(id) {
-   startModalOpen.value = true
+  // you open a modal now; later you can use id
+  startModalOpen.value = true
 }
 
 function onStart(settings) {
-  // const payload = {
-  //   privacy: privacy.value,
-  //   duration: { hours: form.value.hours, minutes: form.value.minutes },
-  //   topic: form.value.topic,
-  //   invitedFriendIds: form.value.selectedFriendIds,
-  //   todos: privacy.value === "private" ? form.value.todos : [],
-  //   settings,
-  //   createdAt: Date.now(),
-  // }
-
-  // const id = sessionStore.createSession(payload)
-  // router.push({ name: "session-room", params: { id } })
+  // keep your future logic here (not deleted)
 }
-
 </script>
+
 <template>
   <div class="min-h-screen bg-white">
     <Header title="Available Session" subtitle="Join a co-study room" />
     <main class="mx-auto max-w px-4 pt-16 pb-28">
-        <FilterBar v-model:duration="durationFilter" v-model:query="searchQuery" />
-        <div class="mt-3 rounded-xl bg-black/5 px-4 py-3 text-xs text-black/70">
+      <FilterBar v-model:duration="durationFilter" v-model:query="searchQuery" />
+
+      <div class="mt-3 rounded-xl bg-black/5 px-4 py-3 text-xs text-black/70">
         <span class="font-semibold">*</span>
         Warning: You can not join a session with duration less than 30 minutes.
       </div>
-<section class="mt-4 space-y-4">
+
+      <section class="mt-4 space-y-4">
         <SessionCard
           v-for="s in filteredSessions"
           :key="s.id"
@@ -72,10 +75,12 @@ function onStart(settings) {
           @enter="enterSession(s.id)"
         />
       </section>
+
       <div v-if="filteredSessions.length === 0" class="mt-8 text-center text-sm text-black/50">
         No sessions match your filters.
       </div>
     </main>
+
     <ConfirmStartModal v-model:open="startModalOpen" @start="onStart" />
     <NavBar />
   </div>
