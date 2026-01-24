@@ -18,18 +18,41 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const userStore = useUserStore()
 
-const privacy = ref("public") // "public" | "private"
+const privacy = ref("public")
 const startModalOpen = ref(false)
 
-// NEW: optionally persist chosen duration as default focus time
+// ✅ save default focus time
 const saveAsDefault = ref(true)
 
-const friends = ref([
-  { id: 1, name: "Daniel", avatar: "https://i.pravatar.cc/64?img=12" },
-  { id: 2, name: "John", avatar: "https://i.pravatar.cc/64?img=3" },
-  { id: 3, name: "Sara", avatar: "https://i.pravatar.cc/64?img=5" },
-  { id: 4, name: "Mina", avatar: "https://i.pravatar.cc/64?img=8" },
-])
+// Generate the list of friends from the userStore.  Fake users do
+// not have avatars stored in the database, so we derive a unique
+// placeholder avatar from the username.
+// Derive the list of available friends from the userStore.  If the
+// backend fails to return any friends (e.g. due to a network or JSON
+// parsing error), provide a fallback list of demo names so that the
+// invitation list is not empty.  Each friend entry has an id, name
+// and avatar generated using the pravatar.cc service.
+const fallbackFriends = [
+  { id: 'Alice', username: 'Alice' },
+  { id: 'Bob', username: 'Bob' },
+  { id: 'Carol', username: 'Carol' },
+  { id: 'Dave', username: 'Dave' },
+  { id: 'Eve', username: 'Eve' },
+  { id: 'Frank', username: 'Frank' },
+  { id: 'Grace', username: 'Grace' },
+  { id: 'Heidi', username: 'Heidi' },
+  { id: 'Ivan', username: 'Ivan' },
+  { id: 'Judy', username: 'Judy' },
+]
+
+const friends = computed(() => {
+  const list = userStore.friends && userStore.friends.length > 0 ? userStore.friends : fallbackFriends
+  return list.map((f) => ({
+    id: f.id,
+    name: f.username,
+    avatar: `https://i.pravatar.cc/64?u=${encodeURIComponent(f.username)}`,
+  }))
+})
 
 const publicForm = ref({
   hours: 0,
@@ -46,33 +69,38 @@ const privateForm = ref({
   todos: [],
 })
 
-const form = computed(() =>
-  privacy.value === "private" ? privateForm.value : publicForm.value
-)
+const form = computed(() => (privacy.value === "private" ? privateForm.value : publicForm.value))
 
-const hasDuration = computed(() => (form.value.hours * 60 + form.value.minutes) > 0)
+const hasDuration = computed(() => form.value.hours * 60 + form.value.minutes > 0)
 const hasTopic = computed(() => form.value.topic.trim().length > 0)
 const hasFriend = computed(() => form.value.selectedFriendIds.length > 0)
 const hasTodo = computed(() => privacy.value !== "private" || (form.value.todos?.length > 0))
 
-const canCreateSession = computed(() => {
-  return hasDuration.value && hasTopic.value && hasFriend.value && hasTodo.value
-})
+const canCreateSession = computed(() => hasDuration.value && hasTopic.value && hasFriend.value && hasTodo.value)
 
+// ✅ Always load focus_time from DB on mount
 onMounted(async () => {
-  // restore login if page refreshed
-  await userStore.restoreLogin()
-  if (!userStore.isLoggedIn) {
-    router.replace({ name: "home" })
-    return
+  // Ensure the user store is initialised (loads mario and friends).  If
+  // already initialised, this call returns immediately.  If it fails,
+  // redirect to the Home page so the user can see the error message.
+  if (!userStore.currentUser) {
+    try {
+      await userStore.init()
+    } catch (e) {
+      console.error(e)
+      router.replace({ name: 'home' })
+      return
+    }
   }
-
-  // apply default focus_time (minutes) to both forms
-  const defMin = Number(userStore.currentUser?.focus_time ?? 15)
-  publicForm.value.hours = Math.floor(defMin / 60)
-  publicForm.value.minutes = defMin % 60
-  privateForm.value.hours = Math.floor(defMin / 60)
-  privateForm.value.minutes = defMin % 60
+  // Set the form default duration from the current user's focus_time
+  const fresh = userStore.currentUser
+  const defMin = Number(fresh.focus_time ?? 25)
+  const h = Math.floor(defMin / 60)
+  const m = defMin % 60
+  publicForm.value.hours = h
+  publicForm.value.minutes = m
+  privateForm.value.hours = h
+  privateForm.value.minutes = m
 })
 
 function createSession() {
@@ -81,13 +109,14 @@ function createSession() {
 }
 
 async function onStart(settings) {
-  // persist default focus time (optional)
-  if (saveAsDefault.value && userStore.currentUser) {
-    const totalMin = (form.value.hours * 60 + form.value.minutes)
+  const totalMin = form.value.hours * 60 + form.value.minutes
+
+  // Persist focus_time before creating a session
+  if (saveAsDefault.value) {
     try {
       await userStore.updateCurrentUser({ focus_time: totalMin })
     } catch (e) {
-      console.warn("Failed to save default focus time:", e)
+      console.warn('Failed to save focus_time:', e)
     }
   }
 
@@ -96,22 +125,25 @@ async function onStart(settings) {
     duration: { hours: form.value.hours, minutes: form.value.minutes },
     topic: form.value.topic,
     invitedFriendIds: form.value.selectedFriendIds,
-    todos: privacy.value === "private" ? form.value.todos : [],
-    settings,
-    createdAt: Date.now(),
+    todos: privacy.value === 'private' ? form.value.todos : [],
+    // personal_todos is the snake_case name expected by the backend.  We
+    // start with an empty list for the admin's personal todo list.
+    personal_todos: [],
   }
 
-  const id = sessionStore.createSession(payload)
-  router.push({ name: "session-room", params: { id } })
+  try {
+    const id = await sessionStore.createSession(payload)
+    router.push({ name: 'session-room', params: { id } })
+  } catch (e) {
+    console.error(e)
+    // Optionally display an error message to the user
+  }
 }
 </script>
 
 <template>
   <div class="min-h-screen bg-white">
-    <Header
-      title="Host Session"
-      :subtitle="userStore.username ? `Logged in as ${userStore.username}` : 'Set up your study room'"
-    />
+    <Header title="Host Session" subtitle="Set up your study room" />
 
     <main class="mx-auto max-w px-4 pt-16 pb-28">
       <div class="flex rounded-full bg-black/5 p-1">
@@ -138,19 +170,10 @@ async function onStart(settings) {
         <StudyDuration v-model:hours="form.hours" v-model:minutes="form.minutes" />
         <Topic v-model="form.topic" />
 
-        <TodoList
-          v-if="privacy === 'private'"
-          v-model="form.todos"
-          title="To Do"
-        />
+        <TodoList v-if="privacy === 'private'" v-model="form.todos" title="To Do" />
 
-        <InviteFriends
-          :options="friends"
-          v-model="form.selectedFriendIds"
-          :max-selected="10"
-        />
+        <InviteFriends :options="friends" v-model="form.selectedFriendIds" :max-selected="10" />
 
-        <!-- NEW: persist default setting -->
         <label class="mt-4 flex items-center gap-2 text-sm text-black/70">
           <input type="checkbox" v-model="saveAsDefault" />
           Save this duration as my default focus time
