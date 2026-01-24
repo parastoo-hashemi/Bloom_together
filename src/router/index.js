@@ -1,20 +1,20 @@
 import { createRouter, createWebHistory } from "vue-router"
 
-import Home from "@/pages/Home.vue"
+import Home2 from "@/pages/home2.vue"
 import HostSession from "@/pages/HostSession.vue"
 import SessionRoom from "@/pages/SessionRoom.vue"
 import AvailableSessions from "@/pages/AvailableSessions.vue"
-import About from "@/pages/About.vue"
+/*import Invitation from "@/pages/Invitation.vue"*/
 
 const router = createRouter({
   history: createWebHistory(),
-  routes: [
-    { path: "/", name: "home", component: Home },
+routes: [
+    { path: "/", name: "home2", component: Home2 },
     { path: "/host", name: "host", component: HostSession },
     { path: "/room/:id", name: "session-room", component: SessionRoom },
 
     { path: "/sessions", name: "available-sessions", component: AvailableSessions },
-    { path: "/about", name: "about", component: About },
+    /*{ path: "/invitation", name: "invitation", component: Invitation },*/
   ],
 })
 
