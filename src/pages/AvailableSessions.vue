@@ -73,17 +73,23 @@ const filteredSessions = computed(() => {
   })
 })
 
+// Remove the start confirmation modal and directly enter the selected session.
 const startModalOpen = ref(false)
 
 function enterSession(id) {
-  // For now show a modal; future logic can navigate to session or join
-  startModalOpen.value = true
+  // Fetch the latest session data from the backend before navigating.
+  // This ensures that the session will resume from the correct point.
+  sessionStore.fetchSession(id).then(() => {
+    router.push({ name: 'session-room', params: { id } })
+  }).catch((e) => {
+    console.error(e)
+    // Optionally display an error message to the user
+  })
 }
 
 function onStart(settings) {
-  // This component does not create sessions.  Session creation
-  // happens in HostSession.  The start modal can be removed or
-  // extended to support joining sessions.
+  // Intentionally left blank.  Previously this function was used by
+  // ConfirmStartModal, which is no longer needed for joining sessions.
 }
 </script>
 
@@ -109,8 +115,8 @@ function onStart(settings) {
           :title="s.title"
           :online-count="s.onlineCount"
           :ends-in-minutes="s.endsInMinutes"
-          :disabled="s.endsInMinutes < 30"
-          @enter="enterSession(s.id)"
+          :disabled="false"
+          @enter="() => enterSession(s.id)"
         />
       </section>
 

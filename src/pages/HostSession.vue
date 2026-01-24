@@ -59,6 +59,11 @@ const publicForm = ref({
   minutes: 15,
   topic: "",
   selectedFriendIds: [],
+  // Include a todos array for public sessions so that tasks can be added
+  // and persisted just like private sessions.  Without this property,
+  // the TodoList component will not have a place to store tasks for
+  // public sessions, leading to lost tasks.
+  todos: [],
 })
 
 const privateForm = ref({
@@ -125,9 +130,9 @@ async function onStart(settings) {
     duration: { hours: form.value.hours, minutes: form.value.minutes },
     topic: form.value.topic,
     invitedFriendIds: form.value.selectedFriendIds,
-    todos: privacy.value === 'private' ? form.value.todos : [],
-    // personal_todos is the snake_case name expected by the backend.  We
-    // start with an empty list for the admin's personal todo list.
+    // Always include the todos array so tasks persist for public sessions.
+    todos: form.value.todos ?? [],
+    // Start with an empty list for the admin's personal todo list.
     personal_todos: [],
   }
 
@@ -170,7 +175,11 @@ async function onStart(settings) {
         <StudyDuration v-model:hours="form.hours" v-model:minutes="form.minutes" />
         <Topic v-model="form.topic" />
 
-        <TodoList v-if="privacy === 'private'" v-model="form.todos" title="To Do" />
+        <!-- Always show the task list so that tasks can be added and persisted
+             for both public and private sessions.  The "todos" array is defined
+             on the form for public sessions (publicForm.todos) and private
+             sessions (privateForm.todos), so v-model binds correctly. -->
+        <TodoList v-model="form.todos" title="To Do" />
 
         <InviteFriends :options="friends" v-model="form.selectedFriendIds" :max-selected="10" />
 
