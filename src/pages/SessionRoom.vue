@@ -72,13 +72,31 @@ const personalTodos = computed({
 
 // ✅ Redirect if invalid session + ✅ login guard added (without deleting your logic)
 onMounted(async () => {
-  await userStore.restoreLogin()
-  if (!userStore.isLoggedIn) {
-    router.replace({ name: "home" })
-    return
+  // Always initialise user and load the current session from the backend.
+  // If the user store hasn't been initialised yet, this call will fetch
+  // the real user (mario) and the list of fake friends.  If it fails,
+  // redirect to the Home page so the error message can be displayed.
+  if (!userStore.currentUser) {
+    try {
+      await userStore.init()
+    } catch (e) {
+      console.error(e)
+      router.replace({ name: "home" })
+      return
+    }
   }
 
-  if (!session.value) router.replace("/host")
+  // Fetch the current session from the backend.  This ensures that the
+  // component is working with the latest version of the session and
+  // allows the session store to populate byId and other caches.
+  try {
+    await sessionStore.fetchSession(sessionId.value)
+  } catch (e) {
+    console.error(e)
+    // If the session no longer exists, redirect back to host page
+    router.replace("/host")
+    return
+  }
 })
 
 // Keep local refs in sync when session changes
