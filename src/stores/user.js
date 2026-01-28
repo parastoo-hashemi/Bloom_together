@@ -1,119 +1,96 @@
-import { defineStore } from "pinia"
+import { defineStore } from 'pinia';
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000"
+// Pinia store for managing the single real user (mario) and the fake friends list.
+// The application uses only one real user. All others are fake users for demonstration.
+// There is no login page; instead, the user store is initialized on app startup.
 
-export const useUserStore = defineStore("user", {
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+export const useUserStore = defineStore('user', {
   state: () => ({
-    users: [],                 // list of { username, flowers, focus_time, config }
-    currentUser: null,         // full user from GET /api/users/:username (includes password in this demo)
-    authError: null,
+    currentUser: null,
+    friends: [],
     loading: false,
+    error: null,
   }),
-
   getters: {
-    isLoggedIn: (s) => !!s.currentUser,
-    username: (s) => s.currentUser?.username ?? null,
+    isLoggedIn: (state) => !!state.currentUser,
+    username: (state) => state.currentUser?.username ?? null,
   },
-
   actions: {
-    _saveSession(username) {
-      localStorage.setItem("bt_username", username)
-    },
-    _clearSession() {
-      localStorage.removeItem("bt_username")
-    },
-
-    async fetchUsers() {
-      this.loading = true
-      this.authError = null
+    // Initialize the user store: fetch the real user and the list of fake friends.
+    async init() {
+      if (this.currentUser) return;
+      this.loading = true;
+      this.error = null;
       try {
-        const res = await fetch(`${API_BASE}/api/users`)
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.error || "Failed to fetch users")
-        this.users = json.data || []
-        return this.users
-      } finally {
-        this.loading = false
-      }
-    },
-
-    async fetchUser(username) {
-      const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(username)}`)
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || "Failed to load user")
-      return json
-    },
-
-    async restoreLogin() {
-      const saved = localStorage.getItem("bt_username")
-      if (!saved) return null
-      try {
-        const user = await this.fetchUser(saved)
-        this.currentUser = user
-        return user
-      } catch {
-        this._clearSession()
-        this.currentUser = null
-        return null
-      }
-    },
-
-    // Demo login: compare password client-side (NOT secure, but ok for class demo)
-    async login(username, password) {
-      this.authError = null
-      this.loading = true
-      try {
-        const user = await this.fetchUser(username)
-        if (String(user.password) !== String(password)) {
-          this.authError = "Wrong password"
-          this.currentUser = null
-          this._clearSession()
-          return false
+        // Fetch the real user (mario) from the backend.  Use text() first
+        // to avoid JSON.parse errors when the response is not JSON (e.g., HTML error pages).
+        const userRes = await fetch(`${API_BASE}/api/users/mario`);
+        const userText = await userRes.text();
+        let userData;
+        try {
+          userData = JSON.parse(userText);
+        } catch {
+          throw new Error(`Invalid JSON response for user: ${userText}`);
         }
-        this.currentUser = user
-        this._saveSession(username)
-        return true
+        if (!userRes.ok) {
+          throw new Error(userData.error || 'Failed to load user');
+        }
+        this.currentUser = userData;
+
+        // Fetch the list of fake friends in the same way.
+        const friendsRes = await fetch(`${API_BASE}/api/friends`);
+        const friendsText = await friendsRes.text();
+        let friendsData;
+        try {
+          friendsData = JSON.parse(friendsText);
+        } catch {
+          throw new Error(`Invalid JSON response for friends: ${friendsText}`);
+        }
+        if (!friendsRes.ok) {
+          throw new Error(friendsData.error || 'Failed to load friends');
+        }
+        // Friends list consists of objects with id and username.
+        this.friends = (friendsData.data || []).map((f) => ({
+          id: f.id,
+          username: f.username,
+        }));
       } catch (err) {
-        this.authError = err?.message || "Login failed"
-        this.currentUser = null
-        this._clearSession()
-        return false
+        this.error = err.message || 'Error initializing user';
+        throw err;
       } finally {
-        this.loading = false
+        this.loading = false;
       }
     },
 
-    logout() {
-      this.currentUser = null
-      this.authError = null
-      this._clearSession()
-    },
-
-    async updateUser(username, patch) {
-      const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(username)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || "Failed to update user")
-      return true
-    },
-
+    // Update the current user’s details (e.g. flowers, focus_time) and reload.
     async updateCurrentUser(patch) {
-      if (!this.currentUser?.username) throw new Error("No logged-in user")
-      const username = this.currentUser.username
-
-      await this.updateUser(username, patch)
-
-      // refresh from backend so state matches DB
-      const fresh = await this.fetchUser(username)
-      this.currentUser = fresh
-
-      // also refresh users list (so Home page shows updated flowers, etc.)
-      await this.fetchUsers()
-
-      return fresh
+      if (!this.currentUser?.username) {
+        throw new Error('No current user');
+      }
+      const username = this.currentUser.username;
+      const res = await fetch(
+        `${API_BASE}/api/users/${encodeURIComponent(username)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update user');
+      }
+      // Reload the current user from the backend to keep local state in sync
+      const freshRes = await fetch(
+        `${API_BASE}/api/users/${encodeURIComponent(username)}`
+      );
+      const freshData = await freshRes.json();
+      if (!freshRes.ok) {
+        throw new Error(freshData.error || 'Failed to reload user');
+      }
+      this.currentUser = freshData;
     },
   },
-})
+});
