@@ -1,9 +1,6 @@
 <script setup>
-import { computed, onMounted, ref, watch } from "vue"
+import { ref, computed, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import { useSessionStore } from "@/stores/session"
-import { useUserStore } from "@/stores/user" // ✅ added
-import NavBar from "../components/main/NavBar.vue" // ✅ added
 
 import SessionTimer from "@/components/session/SessionTimer.vue"
 import FlowerGrowth from "@/components/session/FlowerGrowth.vue"
@@ -14,114 +11,158 @@ import EndSessionModal from "@/components/session/EndSessionModal.vue"
 import FriendsProgressFlowers from "@/components/session/FriendsProgressFlowers.vue"
 import { clamp01 } from "@/utils/flowerGrowth"
 
-const route = useRoute()
-const router = useRouter()
-const sessionStore = useSessionStore()
-const userStore = useUserStore() // ✅ added
+// ================= API =================
+const API_BASE = "http://localhost:3001"
 
-const sessionEnded = ref(false)
-const sessionId = computed(() => route.params.id)
-const session = computed(() => sessionStore.getSession(sessionId.value))
-
-const allUsers = ref([
-  { id: 1, name: "Daniel", avatar: "https://i.pravatar.cc/64?img=12", email: "daniel@info.com" },
-  { id: 2, name: "John", avatar: "https://i.pravatar.cc/64?img=3", email: "john@info.com" },
-  { id: 3, name: "Nat", avatar: "https://i.pravatar.cc/64?img=5", email: "nat@info.com" },
-  { id: 4, name: "Sam", avatar: "https://i.pravatar.cc/64?img=8", email: "sam@info.com" },
-  { id: 5, name: "Joe", avatar: "https://i.pravatar.cc/64?img=10", email: "joe@info.com" },
-  { id: 6, name: "Jac", avatar: "https://i.pravatar.cc/64?img=11", email: "jac@info.com" },
-])
-
-const friends = ref([
-  { id: 1, name: "John", progress: 95 },
-  { id: 2, name: "Daniel", progress: 15 },
-  { id: 3, name: "Joe", progress: 5 },
-  { id: 4, name: "Jae", progress: 55 },
-  { id: 5, name: "Sam", progress: 95 },
-  { id: 6, name: "Mina", progress: 35 },
-  { id: 7, name: "Sara", progress: 70 },
-  { id: 8, name: "Leo", progress: 10 },
-])
-
-function handleSelect(friend) {
-  // optional: open profile drawer, show tooltip, etc.
-  console.log("Selected friend:", friend)
+async function apiGetSession(id) {
+  const r = await fetch(`${API_BASE}/api/sessions/${id}`)
+  if (!r.ok) throw new Error("load failed")
+  return r.json()
 }
 
-// UI state
-const todoOpen = ref(false)
-const addPeopleOpen = ref(false)
-const todoMode = ref("manual")
+async function apiUpdateSession(id, patch) {
+  const r = await fetch(`${API_BASE}/api/sessions/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  })
+  if (!r.ok) throw new Error("update failed")
+}
 
-// ✅ v-model bindings
+// ================= ROUTE =================
+const route = useRoute()
+const router = useRouter()
+const sessionId = String(route.params.id)
+
+// ================= STATIC USERS =================
+const allUsers = ref([
+  { id: 1, name: "Daniel", avatar: "https://i.pravatar.cc/64?img=12" },
+  { id: 2, name: "John", avatar: "https://i.pravatar.cc/64?img=3" },
+  { id: 3, name: "Nat", avatar: "https://i.pravatar.cc/64?img=5" },
+  { id: 4, name: "Sam", avatar: "https://i.pravatar.cc/64?img=8" },
+  { id: 5, name: "Sara", avatar: "https://i.pravatar.cc/64?img=9" },
+  { id: 6, name: "Mina", avatar: "https://i.pravatar.cc/64?img=10" },
+])
+
+const userById = (id) => allUsers.value.find(u => u.id === id)
+
+// ================= SESSION =================
+const session = ref(null)
+const loading = ref(true)
+
+onMounted(async () => {
+  if (!sessionId) return router.replace("/host")
+  try {
+    const raw = await apiGetSession(sessionId)
+    session.value = {
+      id: raw.id,
+      topic: raw.topic,
+      privacy: raw.privacy,
+      duration: raw.duration,
+      invitedFriendIds: raw.invited_ids ?? [],
+      todos: raw.todos ?? [],
+      personalTodos: raw.personal_todos ?? [],
+      aiGenerated: raw.ai_generated === true,
+      aiTodos: raw.ai_todos ?? [],
+    }
+  } catch {
+    router.replace("/host")
+  } finally {
+    loading.value = false
+  }
+})
+
+// ================= INVITES (SOURCE OF TRUTH) =================
+const invitedIds = computed({
+  get: () => session.value?.invitedFriendIds ?? [],
+  set: async (ids) => {
+    if (!session.value) return
+    const prev = session.value.invitedFriendIds
+    session.value.invitedFriendIds = ids // optimistic UI update
+    try {
+      await apiUpdateSession(session.value.id, { invitedFriendIds: ids })
+    } catch (e) {
+      session.value.invitedFriendIds = prev // rollback
+      console.error(e)
+    }
+  },
+})
+
+
+// ================= MEMBERS (UI) =================
+const members = computed(() =>
+  invitedIds.value
+    .map(id => userById(id))
+    .filter(Boolean)
+    .map(u => ({
+      id: u.id,
+      name: u.name,
+      avatar: u.avatar,
+      progress: 0, // ✅ always start at 0
+    }))
+)
+
+
+
+// ================= TODOS (BACKEND SYNC) =================
+const aiTodos = computed({
+  get: () => session.value?.aiTodos ?? [],
+  set: async (v) => {
+    if (!session.value) return
+    const prev = session.value.aiTodos
+    session.value.aiTodos = v
+    try {
+      await apiUpdateSession(session.value.id, { ai_todos: v })
+    } catch (e) {
+      session.value.aiTodos = prev
+      console.error(e)
+    }
+  },
+})
+
 const sessionTodos = computed({
   get: () => session.value?.todos ?? [],
-  set: (v) => {
+  set: async (v) => {
     if (!session.value) return
-    sessionStore.updateTodos(session.value.id, v)
+    const prev = session.value.todos
+    session.value.todos = v
+    await persist(
+      { todos: v },
+      () => (session.value.todos = prev)
+    )
   },
 })
 
 const personalTodos = computed({
   get: () => session.value?.personalTodos ?? [],
-  set: (v) => {
+  set: async (v) => {
     if (!session.value) return
-    sessionStore.updatePersonalTodos(session.value.id, v)
+    const prev = session.value.personalTodos
+    session.value.personalTodos = v
+    await persist(
+      { personal_todos: v }, // backend key
+      () => (session.value.personalTodos = prev)
+    )
   },
 })
 
-// ✅ Redirect if invalid session + ✅ login guard added (without deleting your logic)
-onMounted(async () => {
-  // Always initialise user and load the current session from the backend.
-  // If the user store hasn't been initialised yet, this call will fetch
-  // the real user (mario) and the list of fake friends.  If it fails,
-  // redirect to the Home page so the error message can be displayed.
-  if (!userStore.currentUser) {
-    try {
-      await userStore.init()
-    } catch (e) {
-      console.error(e)
-      router.replace({ name: "home" })
-      return
-    }
-  }
-
-  // Fetch the current session from the backend.  This ensures that the
-  // component is working with the latest version of the session and
-  // allows the session store to populate byId and other caches.
-  try {
-    await sessionStore.fetchSession(sessionId.value)
-  } catch (e) {
-    console.error(e)
-    // If the session no longer exists, redirect back to host page
-    router.replace("/host")
-    return
-  }
-})
-
-// Keep local refs in sync when session changes
-watch(
-  () => session.value,
-  (s) => {
-    if (!s) return
-    sessionTodos.value = (s.todos ?? []).map(t => ({ ...t }))
-    personalTodos.value = (s.personalTodos ?? []).map(t => ({ ...t }))
-  },
-  { immediate: true }
-)
-
-// Derived values
+// ================= TIMER =================
+// ================= TIMER =================
 const durationSec = computed(() => {
-  const s = session.value
-  if (!s) return 0
-  return (s.duration?.hours ?? 0) * 3600 + (s.duration?.minutes ?? 0) * 60
+  const d = session.value?.duration
+  return d ? Number(d.hours) * 3600 + Number(d.minutes) * 60 : 0
 })
 
 const timerPayload = ref({ remainingSec: 0, elapsedSec: 0, totalSec: 0 })
-const freezeTimer = computed(() => sessionEnded.value || endModalOpen.value)
 const lastProgress01 = ref(0)
 const progress01 = computed(() => lastProgress01.value)
+
+const endModalOpen = ref(false)
+const sessionEnded = ref(false)
+const freezeTimer = computed(() => sessionEnded.value || endModalOpen.value)
+
 const expiredHandled = ref(false)
+const timeUp = ref(false)
 
 function onTimerTick(payload) {
   if (freezeTimer.value) return
@@ -163,11 +204,8 @@ const timerStatsText = computed(() => {
   return `${fmt(p.elapsedSec)} / ${fmt(p.totalSec)}`
 })
 
-const invitedIds = computed(() => session.value?.invitedFriendIds ?? [])
-
-// ✅ Define what “done” means (assumes todo item has `done` or `completed`)
+// ================= DONE LOGIC =================
 function isTodoDone(t) {
-  // normalize common naming
   if (typeof t?.done === "boolean") return t.done
   if (typeof t?.completed === "boolean") return t.completed
   return false
@@ -181,10 +219,10 @@ const allTodosDone = computed(() => {
   return all.every(isTodoDone)
 })
 
-// ✅ End-session flow state machine
-const endModalOpen = ref(false)
-const endScreen = ref(1) // 1=success, 2=confirm early exit, 3=time-up / failed end
-const timeUp = ref(false)
+// ================= UI =================
+const addPeopleOpen = ref(false)
+const todoOpen = ref(false)
+const todoMode = ref("manual")
 
 function openTodo() {
   todoOpen.value = true
@@ -194,154 +232,110 @@ function openAddPeople() {
   addPeopleOpen.value = true
 }
 
-function updateInvited(ids) {
-  sessionStore.updateInvitedFriendIds(sessionId.value, ids)
-}
-
-function onSendUsername(username) {
-  console.log("Send invite to username:", username)
-}
-
-// User taps "End The Session"
-function onEndSessionClick() {
-  if (timeUp.value && !allTodosDone.value) {
-    endScreen.value = 3
-  } else if (allTodosDone.value) {
-    endScreen.value = 1
-  } else {
-    endScreen.value = 2
-  }
-  endModalOpen.value = true
-}
+// ================= END SESSION FLOW =================
+const endScreen = ref(1) // 1=success, 2=confirm early exit, 3=time-up/failed
 
 function endSessionNow() {
   sessionEnded.value = true
 }
 
-// User confirms early exit with unfinished todos
+function onEndSessionClick() {
+  if (timeUp.value && !allTodosDone.value) endScreen.value = 3
+  else if (allTodosDone.value) endScreen.value = 1
+  else endScreen.value = 2
+  endModalOpen.value = true
+}
+
 function confirmEarlyExit() {
   endSessionNow()
   endScreen.value = 3
   endModalOpen.value = true
 }
 
-// Timer finished event from SessionTimer
-function onTimerFinished() {
-  timeUp.value = true
-  if (!allTodosDone.value) {
-    endScreen.value = 3
-    endModalOpen.value = true
-  }
-}
-
-// ✅ NEW: give flower if session ended successfully (screen 1) and then user goes home
-async function awardFlowerIfSuccess() {
-  if (!userStore.currentUser) return
-  if (endScreen.value !== 1) return
-
-  try {
-    const current = Number(userStore.currentUser.flowers ?? 0)
-    await userStore.updateCurrentUser({ flowers: current + 1 })
-  } catch (e) {
-    console.warn("Failed to update flowers:", e)
-  }
-}
-
-// Navigate out after “Home Page” / close modal action
-async function goHome() {
-  // if success screen, update flowers
-  await awardFlowerIfSuccess()
-
+function goHome() {
   endModalOpen.value = false
   router.push("/host")
 }
 </script>
 
 <template>
-  <div class="min-h-screen bg-white">
+  <div v-if="!loading && session" class="min-h-screen bg-white">
     <div class="flex items-center justify-between border-b px-4 py-3">
-      <div class="flex items-center">
-        <div class="text-lg font-semibold">{{ session?.topic || "Session" }}</div>
-        <div v-if="session?.privacy === 'private'" class="ml-1 text-xs text-black/40">
-          ( Session Admin )
-        </div>
+      <div class="flex items-center gap-2">
+        <div class="text-lg font-semibold">{{ session.topic || "Session" }}</div>
+        <div v-if="session.privacy === 'private'" class="text-xs text-black/40">(admin)</div>
       </div>
-
       <button
-        v-if="session?.privacy === 'private'"
-        class="grid h-10 w-10 place-items-center rounded-full ring-1 ring-black/10 hover:bg-black/5"
+        v-if="session.privacy === 'private'"
         @click="openAddPeople"
-        aria-label="Add People"
+        class="grid h-10 w-10 place-items-center rounded-full hover:bg-black/5 ring-1 ring-black/10"
+        type="button"
       >
         <AddPeopleIcon class="h-6 w-6" />
       </button>
     </div>
 
-    <div class="mx-auto max-w px-4 pb-24 pt-8">
+    <div class="px-4 pt-6">
       <div class="flex justify-center">
-        <FlowerGrowth :progress="progress01" :size="250" />
+        <FlowerGrowth :progress="progress01" :size="220" />
       </div>
-
-      <div class="mt-6">
-        <SessionTimer
-          v-if="!freezeTimer"
+      <SessionTimer
+        v-if="!freezeTimer"
           :duration-sec="durationSec"
-          @expired="onTimerExpired"
           @tick="onTimerTick"
-          @finished="onTimerFinished"
-        />
-      </div>
+          @expired="onTimerExpired"
+      />
 
       <button
-        @click="openTodo"
         class="mx-auto mt-3 flex rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white"
+        @click="openTodo"
+        type="button"
       >
         To-Do List
       </button>
 
       <button
+        class="mt-3 mb-2 w-full rounded-2xl bg-black py-3 text-sm font-semibold text-white"
         @click="onEndSessionClick"
-        class="mt-3 mb-4 w-full rounded-2xl bg-black py-3 text-sm font-semibold text-white"
+        type="button"
       >
         End The Session
       </button>
 
       <FriendsProgressFlowers
         title="Online Members"
-        :friends="friends"
+        :friends="members"
         :max-visible="5"
-        @select="handleSelect"
       />
     </div>
 
+    <!-- Drawers / Modals -->
     <TodoDrawer
       v-model:open="todoOpen"
       v-model:mode="todoMode"
-      :is-admin="session?.privacy === 'private'"
+      :session-id="session.id"
+      :is-admin="session.privacy === 'private'"
+      :is-generate="session.aiGenerated"
       v-model:session-todos="sessionTodos"
       v-model:personal-todos="personalTodos"
+       v-model:ai-todos="aiTodos"
+       @generatedAi="session.aiGenerated = true" 
     />
 
     <AddPeopleModal
       v-model:open="addPeopleOpen"
       :options="allUsers"
       :model-value="invitedIds"
-      @update:modelValue="updateInvited"
-      @send="onSendUsername"
+      v-model="invitedIds"
     />
-
     <EndSessionModal
       :open="endModalOpen"
       :screen="endScreen"
-      :title="session?.topic || 'Session'"
+      :title="session.topic || 'Session'"
       :stats-text="timerStatsText"
       @close="endModalOpen = false"
       @confirmEnd="confirmEarlyExit"
       @goHome="goHome"
     />
-
-    <!-- ✅ add navbar (logout + navigation) -->
-    <NavBar />
   </div>
 </template>
-
