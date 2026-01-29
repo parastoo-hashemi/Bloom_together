@@ -2,7 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 const props = defineProps({
+  // keep name if you want; semantically this is TOTAL seconds for the session
   durationSec: { type: Number, required: true },
+
+  // epoch milliseconds from backend (session.start_time)
+  startTimeMs: { type: [Number, null], default: null },
+
   autoStart: { type: Boolean, default: true },
 })
 
@@ -13,83 +18,91 @@ const props = defineProps({
  */
 const emit = defineEmits(["expired", "tick"])
 
-const total = ref(0)
-const remaining = ref(0)
+const total = computed(() => Math.max(0, Number(props.durationSec) || 0))
 
+const nowMs = ref(Date.now())
 let t = null
 let expiredEmitted = false
-
-const elapsed = computed(() => Math.max(0, total.value - remaining.value))
-
-const hh = computed(() => String(Math.floor(remaining.value / 3600)).padStart(2, "0"))
-const mm = computed(() => String(Math.floor((remaining.value % 3600) / 60)).padStart(2, "0"))
-const ss = computed(() => String(remaining.value % 60).padStart(2, "0"))
 
 function stop() {
   if (t) clearInterval(t)
   t = null
 }
 
+function calcElapsedSec() {
+  if (!props.startTimeMs) return 0
+  const e = Math.floor((nowMs.value - Number(props.startTimeMs)) / 1000)
+  return Math.max(0, e)
+}
+
+const elapsed = computed(() => {
+  // clamp to total so elapsed never exceeds total in payload/UI
+  return Math.min(calcElapsedSec(), total.value)
+})
+
+const remaining = computed(() => Math.max(0, total.value - elapsed.value))
+
+const hh = computed(() => String(Math.floor(remaining.value / 3600)).padStart(2, "0"))
+const mm = computed(() => String(Math.floor((remaining.value % 3600) / 60)).padStart(2, "0"))
+const ss = computed(() => String(remaining.value % 60).padStart(2, "0"))
+
 function emitTick() {
-  const payload = {
+  emit("tick", {
     remainingSec: remaining.value,
     elapsedSec: elapsed.value,
     totalSec: total.value,
-  }
-  emit("tick", payload)
+  })
 }
 
 function emitExpiredOnce() {
   if (expiredEmitted) return
   expiredEmitted = true
-  const payload = {
+  emit("expired", {
     remainingSec: 0,
     elapsedSec: total.value,
     totalSec: total.value,
+  })
+}
+
+function step() {
+  nowMs.value = Date.now()
+  emitTick()
+  if (total.value > 0 && remaining.value === 0) {
+    stop()
+    emitExpiredOnce()
   }
-  emit("expired", payload)
 }
 
 function start() {
   if (t) return
-  // If already at 0, expire immediately (don’t start an interval)
-  if (remaining.value <= 0) {
-    stop()
+  // If there's no anchor, we can't run a meaningful persistent timer.
+  // We still emit a tick so parent can render.
+  step()
+  if (!props.startTimeMs) return
+
+  // If already expired, emit immediately
+  if (total.value > 0 && remaining.value === 0) {
     emitExpiredOnce()
     return
   }
 
-  t = setInterval(() => {
-    // Decrement first → when it hits 0, expire immediately (no 1-second lag)
-    remaining.value = Math.max(0, remaining.value - 1)
-    emitTick()
-
-    if (remaining.value === 0) {
-      stop()
-      emitExpiredOnce()
-    }
-  }, 1000)
+  t = setInterval(step, 1000)
 }
 
-function reset(seconds) {
+function reset() {
   stop()
   expiredEmitted = false
-
-  const s = Math.max(0, Number(seconds) || 0)
-  total.value = s
-  remaining.value = s
-
-  // Emit an initial tick so parent can render elapsed/remaining immediately
+  nowMs.value = Date.now()
   emitTick()
 
-  if (props.autoStart && remaining.value > 0) start()
-  if (remaining.value === 0) emitExpiredOnce()
+  if (props.autoStart) start()
+  if (props.startTimeMs && total.value > 0 && remaining.value === 0) emitExpiredOnce()
 }
 
-watch(() => props.durationSec, (v) => reset(v), { immediate: true })
+watch(() => [props.durationSec, props.startTimeMs], reset, { immediate: true })
 
 onMounted(() => {
-  if (props.autoStart && remaining.value > 0) start()
+  if (props.autoStart) start()
 })
 
 onBeforeUnmount(stop)

@@ -88,16 +88,8 @@ const totalMinutes = computed(() => form.value.hours * 60 + form.value.minutes)
 
 const hasDuration = computed(() => totalMinutes.value > 0)
 const hasTopic = computed(() => form.value.topic.trim().length > 0)
-
-const hasFriend = computed(() => {
-  if (privacy.value === "public") return true // OPTIONAL in public
-  return form.value.selectedFriendIds.length > 0 // REQUIRED in private
-})
-
-const hasTodo = computed(() => {
-  if (privacy.value !== "private") return true
-  return (form.value.todos?.length ?? 0) > 0
-})
+const hasFriend = computed(() => form.value.selectedFriendIds.length > 0)
+const hasTodo = computed(() => privacy.value !== "private" || (form.value.todos?.length > 0))
 
 const canCreateSession = computed(() => {
   return hasDuration.value && hasTopic.value && hasFriend.value && hasTodo.value
@@ -152,7 +144,7 @@ async function onStart(settings) {
   <div class="min-h-screen bg-white">
     <Header title="Host Session" subtitle="Set up your co-study room" />
 
-    <main class="mx-auto max-w-md px-4 pt-16 pb-28">
+    <main class="mx-auto max-w px-4 pt-16 pb-28">
       <!-- Tabs -->
       <div class="flex rounded-full bg-black/5 p-1">
         <button
