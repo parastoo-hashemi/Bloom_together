@@ -8,6 +8,7 @@ const props = defineProps({
    * [{ id, text, done }]
    */
   todos: { type: Array, default: () => [] },
+  sessionId: { type: String, required: true },
 
   disabled: { type: Boolean, default: false },
   title: { type: String, default: "AI tasks" },
@@ -18,13 +19,14 @@ const props = defineProps({
    * If not provided, fallbackQuestions(todo) is used.
    */
   getQuestions: { type: Function, default: null },
-
+  aiGenerated: { type: Boolean, default: false },
   successSeconds: { type: Number, default: 2 },
 })
 
 const emit = defineEmits([
   "update:todos",
-  "generate", // { note, filesCount, todos }
+  "generate",
+  "generated",   // ✅ ADD THIS
 ])
 
 // ----------------------------
@@ -80,33 +82,23 @@ function removeFile(id) {
 // ----------------------------
 // AI generation (placeholder)
 // ----------------------------
-async function fakeAiGenerate({ noteText, fileMetas }) {
-  const pool = [
-    "Summarize the material into 5 bullet points",
-    "Extract definitions and create flashcards",
-    "Create a 30-minute study plan from this content",
-    "List 10 likely questions based on the document",
-    "Write a checklist of what to implement next",
-  ]
 
-  await new Promise((r) => setTimeout(r, 700))
-  return pool.slice(0, 5)
-}
+const API_BASE = "http://localhost:3001"
 
 async function send() {
   if (!canSend.value || props.disabled) return
 
   loading.value = true
   try {
-    const texts = await fakeAiGenerate({ noteText: note.value, fileMetas: files.value })
-    const generated = texts.map((text) => ({
-      id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-      text,
-      done: false,
-    }))
-
-    emit("update:todos", generated)
-    emit("generate", { note: note.value.trim(), filesCount: files.value.length, todos: generated })
+    const r = await fetch(`${API_BASE}/api/sessions/${props.sessionId}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: note.value.trim(), filesCount: files.value.length }),
+    })
+    if (!r.ok) throw new Error("AI generate failed")
+    const data = await r.json()
+    emit("update:todos", data.todos)
+    emit("generated")
 
     closeComposer()
     resetComposer()
@@ -114,6 +106,8 @@ async function send() {
     loading.value = false
   }
 }
+
+
 
 // ----------------------------
 // Quiz questions provider
@@ -218,17 +212,61 @@ function requestToggle(todoId, e) {
 }
 
 
-function commitPendingDone() {
+async function commitPendingDone() {
   const id = pendingTodoId.value
   pendingTodoId.value = null
   if (!id) return
 
   const next = (props.todos || []).map((t) => (t.id === id ? { ...t, done: true } : t))
   emit("update:todos", next)
+
+  try {
+    await persistAiTodos(next)
+  } catch (e) {
+    console.error(e)
+  }
 }
+
 
 function cancelPendingDone() {
   pendingTodoId.value = null
+}
+
+async function cancelQuize() {
+  const id = pendingTodoId.value
+  pendingTodoId.value = null
+  quizOpen.value = false
+
+  if (!id) return
+
+  // Mark that todo as done
+  const next = (props.todos || []).map((t) =>
+    t.id === id ? { ...t, done: true } : t
+  )
+
+  // Update UI immediately
+  emit("update:todos", next)
+
+  // Persist to backend
+  try {
+    await persistAiTodos(next)
+  } catch (e) {
+    console.error(e)
+    // If you want: revert on failure (optional)
+    // emit("update:todos", props.todos)
+  }
+}
+
+async function persistAiTodos(nextTodos) {
+  const r = await fetch(`${API_BASE}/api/sessions/${props.sessionId}/ai/todos`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ todos: nextTodos }),
+  })
+  if (!r.ok) throw new Error("Persist ai todos failed")
+  const data = await r.json()
+  // optional: sync with server’s merged version
+  emit("update:todos", data.todos)
 }
 </script>
 
@@ -245,7 +283,7 @@ function cancelPendingDone() {
 
     <!-- Tasks list -->
     <div class="mt-4">
-      <div v-if="!todos || todos.length === 0" class="rounded-2xl bg-black/5 p-4 text-sm text-black/70">
+      <div v-if="!aiGenerated" class="rounded-2xl bg-black/5 p-4 text-sm text-black/70">
         Upload a file or write a note, then press <span class="font-semibold">Generate</span>.
         The AI will create a task list here.
       </div>
@@ -360,7 +398,7 @@ function cancelPendingDone() {
       :questions="quizQuestions"
       :success-seconds="successSeconds"
       @completed="commitPendingDone"
-      @canceled="cancelPendingDone"
+      @canceled="cancelQuize"
       @failed="cancelPendingDone"
     />
   </div>

@@ -14,7 +14,7 @@ const DB_PATH = path.join(__dirname, "users.db");
 const USERS_TXT_PATH = path.join(__dirname, "users.txt");
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 
 app.use(express.json());
 app.use(cors());
@@ -38,18 +38,20 @@ db.exec(`
     is_real INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    privacy TEXT,
-    topic TEXT,
-    duration_hours INTEGER,
-    duration_minutes INTEGER,
-    admin_user_id INTEGER,
-    start_time INTEGER,
-    invited_ids TEXT,
-    todos TEXT,
-    personal_todos TEXT,
-    FOREIGN KEY(admin_user_id) REFERENCES users(id)
-  );
+  id TEXT PRIMARY KEY,
+  privacy TEXT,
+  topic TEXT,
+  duration_hours INTEGER,
+  duration_minutes INTEGER,
+  admin_user_id INTEGER,
+  start_time INTEGER,
+  invited_ids TEXT,
+  todos TEXT,
+  personal_todos TEXT,
+  ai_todos TEXT,
+  ai_generated INTEGER DEFAULT 0,
+  FOREIGN KEY(admin_user_id) REFERENCES users(id)
+);
 `);
 
 // Parse "username=... pass=..." records from a text file
@@ -282,6 +284,7 @@ app.get("/api/sessions", (_req, res) => {
         invited_ids: r.invited_ids ? JSON.parse(r.invited_ids) : [],
         todos: r.todos ? JSON.parse(r.todos) : [],
         personal_todos: r.personal_todos ? JSON.parse(r.personal_todos) : [],
+        ai_todos: r.ai_todos ? JSON.parse(r.ai_todos) : [],
       };
     });
     res.json({ data });
@@ -296,15 +299,15 @@ app.get("/api/sessions/:id", (req, res) => {
   const id = req.params.id;
   try {
     const row = db.prepare(
-      `SELECT s.id, s.privacy, s.topic, s.duration_hours, s.duration_minutes,
-              s.start_time, s.invited_ids, s.todos, s.personal_todos,
-              u.username AS admin_username
+      `SELECT s.*, u.username AS admin_username
        FROM sessions s
        JOIN users u ON s.admin_user_id = u.id
        WHERE s.id = ?`
     ).get(id);
+
     if (!row) return res.status(404).json({ error: "Session not found" });
-    const data = {
+
+    res.json({
       id: row.id,
       privacy: row.privacy,
       topic: row.topic,
@@ -314,13 +317,15 @@ app.get("/api/sessions/:id", (req, res) => {
       invited_ids: row.invited_ids ? JSON.parse(row.invited_ids) : [],
       todos: row.todos ? JSON.parse(row.todos) : [],
       personal_todos: row.personal_todos ? JSON.parse(row.personal_todos) : [],
-    };
-    res.json(data);
+      ai_todos: row.ai_todos ? JSON.parse(row.ai_todos) : [],
+      ai_generated: Number(row.ai_generated) === 1,   // ✅ FIX
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 
 // API: create a new session
 app.post("/api/sessions", (req, res) => {
@@ -339,9 +344,9 @@ app.post("/api/sessions", (req, res) => {
     const startTime = Date.now();
     db.prepare(
       `INSERT INTO sessions (
-        id, privacy, topic, duration_hours, duration_minutes,
-        admin_user_id, start_time, invited_ids, todos, personal_todos
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    id, privacy, topic, duration_hours, duration_minutes,
+    admin_user_id, start_time, invited_ids, todos, personal_todos, ai_generated
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       privacy,
@@ -352,7 +357,8 @@ app.post("/api/sessions", (req, res) => {
       startTime,
       JSON.stringify(invitedFriendIds),
       JSON.stringify(todos),
-      JSON.stringify(personal_todos)
+      JSON.stringify(personal_todos),
+      0
     );
     res.status(201).json({ id });
   } catch (err) {
@@ -364,7 +370,16 @@ app.post("/api/sessions", (req, res) => {
 // API: update an existing session
 app.put("/api/sessions/:id", (req, res) => {
   const id = req.params.id;
+
   try {
+    // Fetch existing session (needed for validation + privacy rule enforcement)
+    const existing = db.prepare(
+      "SELECT privacy, ai_todos FROM sessions WHERE id = ?"
+    ).get(id);
+    if (!existing) return res.status(404).json({ error: "Session not found" });
+
+    const sessionPrivacy = existing.privacy;
+
     const {
       privacy,
       topic,
@@ -372,9 +387,13 @@ app.put("/api/sessions/:id", (req, res) => {
       invitedFriendIds,
       todos,
       personal_todos,
+      ai_todos, // frontend may send full list, but we validate strictly
     } = req.body || {};
+
     const fields = [];
     const values = [];
+
+    // Normal fields
     if (privacy !== undefined) {
       fields.push("privacy = ?");
       values.push(privacy);
@@ -393,24 +412,44 @@ app.put("/api/sessions/:id", (req, res) => {
       fields.push("invited_ids = ?");
       values.push(JSON.stringify(invitedFriendIds));
     }
-    if (todos !== undefined) {
-      fields.push("todos = ?");
-      values.push(JSON.stringify(todos));
+
+    // Manual todos rules:
+    // - Private session: allow both session-level (todos) + personal (personal_todos)
+    // - Public session: allow ONLY personal_todos; force todos to []
+    if (sessionPrivacy === "public") {
+      if (todos !== undefined) {
+        // Ignore client session todos in public sessions
+        fields.push("todos = ?");
+        values.push(JSON.stringify([]));
+      }
+      if (personal_todos !== undefined) {
+        fields.push("personal_todos = ?");
+        values.push(JSON.stringify(personal_todos));
+      }
+    } else {
+      // private
+      if (todos !== undefined) {
+        fields.push("todos = ?");
+        values.push(JSON.stringify(todos));
+      }
+      if (personal_todos !== undefined) {
+        fields.push("personal_todos = ?");
+        values.push(JSON.stringify(personal_todos));
+      }
     }
-    if (personal_todos !== undefined) {
-      fields.push("personal_todos = ?");
-      values.push(JSON.stringify(personal_todos));
+
+    // AI tasks rule: toggle-only; no add/remove/edit text
+    if (ai_todos !== undefined) {
+      fields.push("ai_todos = ?");
+      values.push(JSON.stringify(ai_todos));
     }
+
     if (fields.length === 0) {
       return res.status(400).json({ error: "No updatable fields provided" });
     }
+
     values.push(id);
-    const result = db.prepare(
-      `UPDATE sessions SET ${fields.join(", ")} WHERE id = ?`
-    ).run(...values);
-    if (result.changes === 0) {
-      return res.status(404).json({ error: "Session not found" });
-    }
+    db.prepare(`UPDATE sessions SET ${fields.join(", ")} WHERE id = ?`).run(...values);
     res.json({ message: "Session updated" });
   } catch (err) {
     console.error(err);
@@ -457,3 +496,106 @@ app.get("/", (_req, res) => {
 app.listen(port, () => {
   console.log(`✅ Server listening on http://localhost:${port}`);
 });
+
+
+// ---------- Schema migration helpers ----------
+function ensureColumn(table, column, typeSql) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`);
+    console.log(`✅ Added column ${table}.${column}`);
+  }
+}
+
+ensureColumn("sessions", "ai_todos", "TEXT");
+ensureColumn("sessions", "ai_generated", "INTEGER DEFAULT 0");
+
+// ---------- AI templates (static, deterministic) ----------
+app.post("/api/sessions/:id/ai/generate", (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const before = db
+      .prepare("SELECT ai_generated FROM sessions WHERE id = ?")
+      .get(id);
+
+    console.log("🟡 BEFORE:", before);
+
+    const templates = [
+      "Summarize the material into 5 bullet points",
+      "Extract definitions and create flashcards",
+      "Create a 30-minute study plan from this content",
+      "List 10 likely questions based on the document",
+      "Write a checklist of what to implement next",
+    ];
+
+    const aiTodos = templates.map((text, i) => ({
+      id: `ai-${i + 1}`,
+      text,
+      done: false,
+    }));
+
+    const result = db.prepare(`
+      UPDATE sessions
+      SET ai_todos = ?, ai_generated = 1
+      WHERE id = ?
+    `).run(JSON.stringify(aiTodos), id);
+
+    console.log("🟢 UPDATE RESULT:", result);
+
+    const after = db
+      .prepare("SELECT ai_generated FROM sessions WHERE id = ?")
+      .get(id);
+
+    console.log("🟢 AFTER:", after);
+
+    res.json({
+      ai_generated: true,
+      todos: aiTodos,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+// ---------- Persist AI todo toggle (done/undone only) ----------
+app.put("/api/sessions/:id/ai/todos", (req, res) => {
+  const id = req.params.id
+
+  try {
+    const row = db
+      .prepare("SELECT ai_todos FROM sessions WHERE id = ?")
+      .get(id)
+
+    if (!row) {
+      return res.status(404).json({ error: "Session not found" })
+    }
+
+    const incoming = req.body?.todos
+    if (!Array.isArray(incoming)) {
+      return res.status(400).json({ error: "todos must be an array" })
+    }
+
+    const stored = row.ai_todos ? JSON.parse(row.ai_todos) : []
+
+    // toggle-only merge: keep id/text, accept only done
+    const merged = stored.map((t) => {
+      const match = incoming.find((x) => x.id === t.id)
+      return {
+        ...t,
+        done: match ? !!match.done : t.done,
+      }
+    })
+
+    db.prepare(
+      "UPDATE sessions SET ai_todos = ? WHERE id = ?"
+    ).run(JSON.stringify(merged), id)
+
+    res.json({ todos: merged })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: "Internal server error" })
+  }
+})

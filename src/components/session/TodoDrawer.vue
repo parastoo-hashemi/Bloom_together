@@ -5,14 +5,14 @@ import TodoAddRow from "@/components/session/TodoAddRow.vue"
 import TodoListPanel from "@/components/session/TodoListPanel.vue"
 import AiTodoPanel from "@/components/session/AiTodoPanel.vue"
 
-const aiTodos = ref([]) 
-
 // Props
 const props = defineProps({
   open: { type: Boolean, default: false },              // v-model:open
   mode: { type: String, default: "manual" },            // v-model:mode ("manual" | "ai")
   isAdmin: { type: Boolean, default: false },
-
+  aiTodos: { type: Array, default: () => [] },
+  sessionId: { type: String, required: true },
+  isGenerate: { type: Boolean, required: true },
   // Two scopes (so you can support "Session" + "Individual")
   sessionTodos: { type: Array, default: () => [] },     // shared tasks
   personalTodos: { type: Array, default: () => [] },    // user-only tasks
@@ -24,6 +24,8 @@ const emit = defineEmits([
   "update:mode",
   "update:sessionTodos",
   "update:personalTodos",
+  "update:aiTodos",
+  "generatedAi"
 ])
 
 // Manual sub-tab: only meaningful for admin (Session vs Individual)
@@ -44,6 +46,11 @@ watch(
   (v) => (localPersonalTodos.value = normalize(v)),
   { immediate: true }
 )
+
+const aiTodosModel = computed({
+  get: () => props.aiTodos,
+  set: (v) => emit("update:aiTodos", v),
+});
 
 function normalize(v) {
   return (v || []).map((x) => ({
@@ -81,9 +88,32 @@ function commitTodos(next) {
   }
 }
 
-function addTask(text) {
+const API_BASE = "http://localhost:3001"
+
+async function persistManualTodos(next) {
+  // decide which field we are editing
+  const isSessionScope = props.isAdmin && manualScope.value === "session"
+  const payload = isSessionScope
+    ? { todos: next }                 // session shared todos
+    : { personal_todos: next }        // personal todos
+
+  const r = await fetch(`${API_BASE}/api/sessions/${props.sessionId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+
+  if (!r.ok) {
+    const text = await r.text().catch(() => "")
+    throw new Error(`Persist manual todos failed: ${r.status} ${text}`)
+  }
+}
+
+
+async function addTask(text) {
   const t = text.trim()
   if (!t) return
+
   const item = {
     id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
     text: t,
@@ -91,29 +121,50 @@ function addTask(text) {
   }
 
   const next = [item, ...activeTodos.value]
-  // update local
+
   if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
   else localPersonalTodos.value = next
 
   commitTodos(next)
+
+  try {
+    await persistManualTodos(next)
+  } catch (e) {
+    console.error(e)
+    // optional: revert UI if you want strict consistency
+  }
 }
 
-function toggleDone(id) {
+
+async function toggleDone(id) {
   const next = activeTodos.value.map((x) => (x.id === id ? { ...x, done: !x.done } : x))
 
   if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
   else localPersonalTodos.value = next
 
   commitTodos(next)
+
+  try {
+    await persistManualTodos(next)
+  } catch (e) {
+    console.error(e)
+  }
 }
 
-function removeTask(id) {
+
+async function removeTask(id) {
   const next = activeTodos.value.filter((x) => x.id !== id)
 
   if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
   else localPersonalTodos.value = next
 
   commitTodos(next)
+
+  try {
+    await persistManualTodos(next)
+  } catch (e) {
+    console.error(e)
+  }
 }
 </script>
 
@@ -187,7 +238,12 @@ function removeTask(id) {
 
           <!-- AI (placeholder for your next message UI) -->
          <div v-else class="mt-4">
-              <AiTodoPanel v-model:todos="aiTodos" />
+              <AiTodoPanel 
+              :session-id="props.sessionId"
+              :aiGenerated="props.isGenerate"
+               @generated="emit('generatedAi')" 
+                v-model:todos="aiTodosModel"
+              />
           </div>
         </div>
       </div>

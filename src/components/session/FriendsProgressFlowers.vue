@@ -36,10 +36,15 @@ function selectFriend(f) {
         @click="selectFriend(f)"
       >
         <FlowerGrowth
-          :progress="10"
+          v-if="(f.progress ?? 0) > 0"
+          :progress="clamp01((f.progress ?? 0) / 100)"
           :size="40"
           compact
         />
+        <div
+          v-else
+          class="h-10 w-10 rounded-full border border-dashed border-black/20"
+        ></div>
         <div class="mt-2 text-xs font-medium">{{ f.name }}</div>
         <div class="text-[11px] text-black/40">{{ f.progress ?? 0 }}%</div>
       </button>
