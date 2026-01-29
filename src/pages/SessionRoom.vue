@@ -10,6 +10,7 @@ import AddPeopleIcon from "@/components/icons/AddPeopleIcon.vue"
 import EndSessionModal from "@/components/session/EndSessionModal.vue"
 import FriendsProgressFlowers from "@/components/session/FriendsProgressFlowers.vue"
 import { clamp01 } from "@/utils/flowerGrowth"
+import { onBeforeRouteLeave } from "vue-router"
 
 // ================= API =================
 const API_BASE = "http://localhost:3001"
@@ -27,6 +28,23 @@ async function apiUpdateSession(id, patch) {
     body: JSON.stringify(patch),
   })
   if (!r.ok) throw new Error("update failed")
+}
+
+async function apiEndSession(id) {
+  const r = await fetch(`${API_BASE}/api/sessions/${id}/end`, { method: "POST" })
+  if (!r.ok) throw new Error("end failed")
+}
+
+const endTriggered = ref(false)
+
+async function endAndExit() {
+  if (endTriggered.value || !session.value?.id) return
+  endTriggered.value = true
+  try {
+    await apiEndSession(session.value.id)
+  } catch (e) {
+    console.error(e)
+  }
 }
 
 // ================= ROUTE =================
@@ -59,6 +77,7 @@ onMounted(async () => {
       topic: raw.topic,
       privacy: raw.privacy,
       duration: raw.duration,
+      startTime: raw.start_time ?? null,
       invitedFriendIds: raw.invited_ids ?? [],
       todos: raw.todos ?? [],
       personalTodos: raw.personal_todos ?? [],
@@ -147,7 +166,6 @@ const personalTodos = computed({
 })
 
 // ================= TIMER =================
-// ================= TIMER =================
 const durationSec = computed(() => {
   const d = session.value?.duration
   return d ? Number(d.hours) * 3600 + Number(d.minutes) * 60 : 0
@@ -172,21 +190,18 @@ function onTimerTick(payload) {
   lastProgress01.value = total > 0 ? clamp01(elapsed / total) : 0
 }
 
-function onTimerExpired(payload) {
+async function onTimerExpired(payload) {
   if (expiredHandled.value) return
   expiredHandled.value = true
   if (freezeTimer.value) return
 
-  timerPayload.value = payload
-  const total = payload?.totalSec ?? 0
-  const elapsed = payload?.elapsedSec ?? 0
-  lastProgress01.value = total > 0 ? clamp01(elapsed / total) : 1
 
   timeUp.value = true
   if (!allTodosDone.value && !sessionEnded.value) {
     endSessionNow()
     endScreen.value = 3
     endModalOpen.value = true
+    await endAndExit()
   }
 }
 
@@ -214,7 +229,8 @@ function isTodoDone(t) {
 const allTodosDone = computed(() => {
   const a = sessionTodos.value ?? []
   const b = personalTodos.value ?? []
-  const all = [...a, ...b]
+  const c = aiTodos.value ?? []
+  const all = [...a, ...b, ...c]
   if (all.length === 0) return true
   return all.every(isTodoDone)
 })
@@ -239,23 +255,33 @@ function endSessionNow() {
   sessionEnded.value = true
 }
 
-function onEndSessionClick() {
+async function onEndSessionClick() {
   if (timeUp.value && !allTodosDone.value) endScreen.value = 3
-  else if (allTodosDone.value) endScreen.value = 1
+  else if (allTodosDone.value){
+    await endAndExit() 
+    endScreen.value = 1
+  }
   else endScreen.value = 2
   endModalOpen.value = true
 }
 
-function confirmEarlyExit() {
+async function confirmEarlyExit() {
   endSessionNow()
   endScreen.value = 3
   endModalOpen.value = true
+  await endAndExit()
+  // router.push("/host")
 }
 
 function goHome() {
   endModalOpen.value = false
   router.push("/host")
 }
+
+onBeforeRouteLeave(async () => {
+  await endAndExit()
+})
+
 </script>
 
 <template>
@@ -281,9 +307,10 @@ function goHome() {
       </div>
       <SessionTimer
         v-if="!freezeTimer"
-          :duration-sec="durationSec"
-          @tick="onTimerTick"
-          @expired="onTimerExpired"
+        :duration-sec="durationSec"
+        :start-time-ms="session.startTime"
+        @tick="onTimerTick"
+        @expired="onTimerExpired"
       />
 
       <button

@@ -114,6 +114,7 @@ const isTerminal = () => props.screen === 1 || props.screen === 3
           {{ successCta }}
         </button>
         <button
+          disabled
           class="mt-6 w-full rounded-2xl bg-black py-3 text-sm font-semibold text-white"
           @click="emit('goGarden')"
         >

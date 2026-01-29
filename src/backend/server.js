@@ -268,44 +268,55 @@ app.get("/api/sessions", (_req, res) => {
   try {
     const rows = db.prepare(
       `SELECT s.id, s.privacy, s.topic, s.duration_hours, s.duration_minutes,
-              s.start_time, s.invited_ids, s.todos, s.personal_todos,
+              s.start_time, s.invited_ids, s.todos, s.personal_todos, s.ai_todos, s.ai_generated,
               u.username AS admin_username
        FROM sessions s
-       JOIN users u ON s.admin_user_id = u.id`
-    ).all();
-    const data = rows.map(r => {
-      return {
-        id: r.id,
-        privacy: r.privacy,
-        topic: r.topic,
-        duration: { hours: r.duration_hours, minutes: r.duration_minutes },
-        admin_username: r.admin_username,
-        start_time: r.start_time,
-        invited_ids: r.invited_ids ? JSON.parse(r.invited_ids) : [],
-        todos: r.todos ? JSON.parse(r.todos) : [],
-        personal_todos: r.personal_todos ? JSON.parse(r.personal_todos) : [],
-        ai_todos: r.ai_todos ? JSON.parse(r.ai_todos) : [],
-      };
-    });
-    res.json({ data });
+       JOIN users u ON s.admin_user_id = u.id
+       WHERE s.ended_at IS NULL
+       ORDER BY s.start_time DESC`
+    ).all()
+
+    const data = rows.map(r => ({
+      id: r.id,
+      privacy: r.privacy,
+      topic: r.topic,
+      duration: { hours: r.duration_hours, minutes: r.duration_minutes },
+      admin_username: r.admin_username,
+      start_time: r.start_time,
+      invited_ids: r.invited_ids ? JSON.parse(r.invited_ids) : [],
+      todos: r.todos ? JSON.parse(r.todos) : [],
+      personal_todos: r.personal_todos ? JSON.parse(r.personal_todos) : [],
+      ai_todos: r.ai_todos ? JSON.parse(r.ai_todos) : [],
+      ai_generated: Number(r.ai_generated) === 1,
+    }))
+
+    res.json({ data })
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error(err)
+    res.status(500).json({ error: "Internal server error" })
   }
-});
+})
 
 // API: get a single session by ID
 app.get("/api/sessions/:id", (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id
   try {
     const row = db.prepare(
       `SELECT s.*, u.username AS admin_username
        FROM sessions s
        JOIN users u ON s.admin_user_id = u.id
        WHERE s.id = ?`
-    ).get(id);
+    ).get(id)
 
-    if (!row) return res.status(404).json({ error: "Session not found" });
+    if (!row) return res.status(404).json({ error: "Session not found" })
+    if (row.ended_at) return res.status(404).json({ error: "Session ended" })
+
+    // keep your start_time logic...
+    if (!row.start_time) {
+      const start = Date.now()
+      db.prepare("UPDATE sessions SET start_time = ? WHERE id = ?").run(start, id)
+      row.start_time = start
+    }
 
     res.json({
       id: row.id,
@@ -318,13 +329,13 @@ app.get("/api/sessions/:id", (req, res) => {
       todos: row.todos ? JSON.parse(row.todos) : [],
       personal_todos: row.personal_todos ? JSON.parse(row.personal_todos) : [],
       ai_todos: row.ai_todos ? JSON.parse(row.ai_todos) : [],
-      ai_generated: Number(row.ai_generated) === 1,   // ✅ FIX
-    });
+      ai_generated: Number(row.ai_generated) === 1,
+    })
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error(err)
+    res.status(500).json({ error: "Internal server error" })
   }
-});
+})
 
 
 // API: create a new session
@@ -500,16 +511,16 @@ app.listen(port, () => {
 
 // ---------- Schema migration helpers ----------
 function ensureColumn(table, column, typeSql) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all()
   if (!cols.some(c => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`);
-    console.log(`✅ Added column ${table}.${column}`);
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`)
+    console.log(`✅ Added column ${table}.${column}`)
   }
 }
 
 ensureColumn("sessions", "ai_todos", "TEXT");
 ensureColumn("sessions", "ai_generated", "INTEGER DEFAULT 0");
-
+ensureColumn("sessions", "ended_at", "INTEGER");
 // ---------- AI templates (static, deterministic) ----------
 app.post("/api/sessions/:id/ai/generate", (req, res) => {
   const id = req.params.id;
@@ -594,6 +605,20 @@ app.put("/api/sessions/:id/ai/todos", (req, res) => {
     ).run(JSON.stringify(merged), id)
 
     res.json({ todos: merged })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+app.post("/api/sessions/:id/end", (req, res) => {
+  const id = req.params.id
+  try {
+    const row = db.prepare("SELECT id FROM sessions WHERE id = ?").get(id)
+    if (!row) return res.status(404).json({ error: "Session not found" })
+
+    db.prepare("UPDATE sessions SET ended_at = ? WHERE id = ?").run(Date.now(), id)
+    res.json({ message: "Session ended" })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: "Internal server error" })
