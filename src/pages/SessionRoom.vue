@@ -83,6 +83,7 @@ onMounted(async () => {
       personalTodos: raw.personal_todos ?? [],
       aiGenerated: raw.ai_generated === true,
       aiTodos: raw.ai_todos ?? [],
+      adminUsername: raw.admin_username
     }
   } catch {
     router.replace("/host")
@@ -289,10 +290,10 @@ onBeforeRouteLeave(async () => {
     <div class="flex items-center justify-between border-b px-4 py-3">
       <div class="flex items-center gap-2">
         <div class="text-lg font-semibold">{{ session.topic || "Session" }}</div>
-        <div v-if="session.privacy === 'private'" class="text-xs text-black/40">(admin)</div>
+        <div v-if="session.adminUsername === 'mario'" class="text-xs text-black/40">(admin)</div>
       </div>
       <button
-        v-if="session.privacy === 'private'"
+        v-if="session.adminUsername === 'mario'"
         @click="openAddPeople"
         class="grid h-10 w-10 place-items-center rounded-full hover:bg-black/5 ring-1 ring-black/10"
         type="button"
@@ -341,7 +342,7 @@ onBeforeRouteLeave(async () => {
       v-model:open="todoOpen"
       v-model:mode="todoMode"
       :session-id="session.id"
-      :is-admin="session.privacy === 'private'"
+      :is-admin="session.adminUsername === 'mario'"
       :is-generate="session.aiGenerated"
       v-model:session-todos="sessionTodos"
       v-model:personal-todos="personalTodos"

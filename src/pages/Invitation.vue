@@ -12,8 +12,8 @@ const router = useRouter()
 // 1) endsIn: "2h" / "3h 40m" (static), OR
 // 2) endsAt: timestamp ms (dynamic countdown)
 const invitations = ref([
-  { id: 1, title: "MLDL", privacy: "public", by: "Sara", endsIn: "2h" },
-  { id: 2, title: "Big Data", privacy: "public", by: "Jhon", endsIn: "3h 40m" },
+  // { id: 1, title: "MLDL", privacy: "public", by: "Sara", endsIn: "2h" },
+  // { id: 2, title: "Big Data", privacy: "public", by: "Jhon", endsIn: "3h 40m" },
 ])
 
 function goBack() {
