@@ -1,9 +1,6 @@
 <script setup>
-import { computed, ref, onMounted } from "vue"
+import { computed, ref, onMounted, onBeforeUnmount } from "vue"
 import { useRouter } from "vue-router"
-
-import { useUserStore } from "@/stores/user"
-import { useSessionStore } from "@/stores/session"
 
 import Header from "../components/main/Header.vue"
 import NavBar from "../components/main/NavBar.vue"
@@ -12,115 +9,133 @@ import FilterBar from "../components/AvailableSessions/FilterBar.vue"
 import ConfirmStartModal from "@/components/HostSession/ConfirmStartModal.vue"
 
 const router = useRouter()
-const userStore = useUserStore()
-const sessionStore = useSessionStore()
 
 // Filter states
-const durationFilter = ref('all') // 'all' | '30' | '60' | '120'
-const searchQuery = ref('')
+const durationFilter = ref("all") // "all" | "30" | "60" | "120"
+const searchQuery = ref("")
 
-// On mount, initialise user store and load sessions from backend
-const loading = ref(true)
-const errorMsg = ref('')
-onMounted(async () => {
+// Data
+const rawSessions = ref([])  // as returned by API
+const loading = ref(false)
+const error = ref("")
+
+// time ticker (updates remaining minutes without refetching)
+const now = ref(Date.now())
+let tick = null
+
+async function loadSessions() {
+  loading.value = true
+  error.value = ""
   try {
-    if (!userStore.currentUser) {
-      await userStore.init()
-    }
-    await sessionStore.fetchSessions()
+    const res = await fetch("http://localhost:3001/api/sessions")
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const json = await res.json()
+    rawSessions.value = Array.isArray(json.data) ? json.data : []
   } catch (e) {
-    console.error(e)
-    errorMsg.value = e.message || 'Failed to load sessions'
+    error.value = e?.message || "Failed to load sessions"
+    rawSessions.value = []
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  loadSessions()
+  tick = setInterval(() => {
+    now.value = Date.now()
+  }, 10_000) // every 10s is plenty
 })
 
-// Build an array of sessions for filtering.  Each session object
-// contains id, topic, privacy, duration (hours and minutes) and
-// onlineCount (number of invited friends plus admin, approximate).  We
-// compute endsInMinutes as the remaining time until end (not yet
-// available on the backend, so we approximate by duration).
-// Build an array of sessions for filtering.  Each session object
-// contains id, topic, privacy, duration (hours and minutes) and
-// onlineCount (number of invited friends plus admin).  We compute
-// endsInMinutes from the session's duration because the backend
-// does not provide a remaining time yet.  Note: the session store
-// normalises property names (invitedFriendIds instead of invited_ids,
-// personalTodos instead of personal_todos) for easier use in the
-// frontend.
-const allSessions = computed(() => {
-  return Object.values(sessionStore.byId).map((s) => {
-    const endsInMinutes = (s.duration?.hours ?? 0) * 60 + (s.duration?.minutes ?? 0)
-    const onlineCount = 1 + (s.invitedFriendIds?.length ?? 0) // admin + invited
-    return {
-      id: s.id,
-      title: s.topic || 'Session',
-      onlineCount,
-      endsInMinutes,
-      privacy: s.privacy,
-    }
-  })
+onBeforeUnmount(() => {
+  if (tick) clearInterval(tick)
 })
 
+// Map API -> UI card model
+const sessions = computed(() => {
+  return rawSessions.value
+    .map((s) => {
+      const title = (s.topic || "").trim() || "Session"
+
+      const totalMin =
+        Number(s?.duration?.hours ?? 0) * 60 +
+        Number(s?.duration?.minutes ?? 0)
+
+      const start = Number(s?.start_time ?? 0)
+      const elapsedMin = start
+        ? Math.floor((now.value - start) / 60000)
+        : 0
+
+      const endsInMinutes = Math.max(0, totalMin - elapsedMin)
+
+      return {
+        id: s.id,
+        title,
+        endsInMinutes,
+        onlineCount: Array.isArray(s.invited_ids) ? s.invited_ids.length : 0,
+        privacy: s.privacy,
+        admin_username: s.admin_username,
+      }
+    })
+    .filter((s) => s.endsInMinutes > 0)
+})
+
+
+// Filtering
 const filteredSessions = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  const min = durationFilter.value === 'all' ? 0 : Number(durationFilter.value)
-  return allSessions.value.filter((s) => {
+  const min = durationFilter.value === "all" ? 0 : Number(durationFilter.value)
+
+  return sessions.value.filter((s) => {
     const okName = !q || s.title.toLowerCase().includes(q)
     const okDur = s.endsInMinutes >= min
     return okName && okDur
   })
 })
 
-// Remove the start confirmation modal and directly enter the selected session.
+// Enter + modal
 const startModalOpen = ref(false)
+const selectedSessionId = ref(null)
 
 function enterSession(id) {
-  // Fetch the latest session data from the backend before navigating.
-  // This ensures that the session will resume from the correct point.
-  sessionStore.fetchSession(id).then(() => {
-    router.push({ name: 'session-room', params: { id } })
-  }).catch((e) => {
-    console.error(e)
-    // Optionally display an error message to the user
-  })
+  selectedSessionId.value = id
+  startModalOpen.value = true
 }
 
-function onStart(settings) {
-  // Intentionally left blank.  Previously this function was used by
-  // ConfirmStartModal, which is no longer needed for joining sessions.
+function onStart(_settings) {
+  // Join the selected session
+  if (!selectedSessionId.value) return
+  router.push({ name: "session-room", params: { id: selectedSessionId.value } })
 }
 </script>
 
 <template>
   <div class="min-h-screen bg-white">
     <Header title="Available Session" subtitle="Join a co-study room" />
+
     <main class="mx-auto max-w px-4 pt-16 pb-28">
-      <div v-if="errorMsg" class="mb-4 text-red-600 text-sm">
-        {{ errorMsg }}
-      </div>
-      <div v-else-if="loading" class="mb-4 text-black/60 text-sm">Loading sessions...</div>
       <FilterBar v-model:duration="durationFilter" v-model:query="searchQuery" />
 
       <div class="mt-3 rounded-xl bg-black/5 px-4 py-3 text-xs text-black/70">
         <span class="font-semibold">*</span>
-        Warning: You can not join a session with duration less than 30 minutes.
+        Warning: You can not join a session with duration less than 15 minutes.
       </div>
 
-      <section class="mt-4 space-y-4">
+      <div v-if="loading" class="mt-6 text-sm text-black/50">Loading…</div>
+      <div v-else-if="error" class="mt-6 text-sm text-red-600">{{ error }}</div>
+
+      <section v-else class="mt-4 space-y-4">
         <SessionCard
           v-for="s in filteredSessions"
           :key="s.id"
           :title="s.title"
           :online-count="s.onlineCount"
           :ends-in-minutes="s.endsInMinutes"
-          :disabled="false"
-          @enter="() => enterSession(s.id)"
+          :disabled="s.endsInMinutes > 15"
+          @enter="enterSession(s.id)"
         />
       </section>
 
-      <div v-if="filteredSessions.length === 0" class="mt-8 text-center text-sm text-black/50">
+      <div v-if="!loading && !error && filteredSessions.length === 0" class="mt-8 text-center text-sm text-black/50">
         No sessions match your filters.
       </div>
     </main>

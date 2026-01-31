@@ -5,7 +5,6 @@ import HostSession from "@/pages/HostSession.vue"
 import SessionRoom from "@/pages/SessionRoom.vue"
 import AvailableSessions from "@/pages/AvailableSessions.vue"
 import Invitation from "@/pages/Invitation.vue"
-import Test from "@/pages/test.vue"
 
 const router = createRouter({
   history: createWebHistory(),
@@ -13,10 +12,8 @@ const router = createRouter({
     { path: "/", name: "home", component: Home },
     { path: "/host", name: "host", component: HostSession },
     { path: "/room/:id", name: "session-room", component: SessionRoom },
-
     { path: "/sessions", name: "available-sessions", component: AvailableSessions },
     { path: "/invitation", name: "invitation", component: Invitation },
-    { path: "/test", name: "Test", component: Test },
   ],
 })
 

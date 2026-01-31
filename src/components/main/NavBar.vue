@@ -1,26 +1,18 @@
 <script setup>
 import { useRoute, useRouter } from "vue-router"
-import { useUserStore } from "@/stores/user"
 
 const route = useRoute()
 const router = useRouter()
-const userStore = useUserStore()
 
 const items = [
   { label: "Home", to: "/host", key: "home", icon: "home" },
   { label: "Sessions", to: "/sessions", key: "sessions", icon: "mail" },
-  { label: "About", to: "/about", key: "about", icon: "plant" },
-  { label: "Logout", to: null, key: "logout", icon: "logout" },
+  { label: "Invitation", to: "/invitation", key: "invitation", icon: "invitation" }
 ]
 
 const isActive = (to) => (to ? route.path === to : false)
 
 function onClickItem(it) {
-  if (it.key === "logout") {
-    userStore.logout()
-    router.replace("/")
-    return
-  }
   if (it.to) router.push(it.to)
 }
 </script>
@@ -44,25 +36,24 @@ function onClickItem(it) {
                     :fill="isActive(it.to) ? 'currentColor' : 'none'"
                     stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
             </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" v-else-if="it.icon === 'mail'" width="22" height="22" viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- list (available sessions) -->
+              <path d="M3 7h7"/>
+              <path d="M3 12h7"/>
+              <path d="M3 17h7"/>
 
-            <svg v-else-if="it.icon === 'mail'" width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <path d="M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z"
-                    stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-              <path d="m4 8 8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              <!-- door (enter/join) -->
+              <path d="M14 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>
+              <path d="M14 6v12"/>
+              <circle cx="18.5" cy="12" r="0.8"/>
             </svg>
-
-            <svg v-else-if="it.icon === 'plant'" width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <path d="M12 21c5-3 8-7 8-11a5 5 0 0 0-8-4 5 5 0 0 0-8 4c0 4 3 8 8 11Z"
-                    stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-              <path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-
-            <!-- ✅ logout icon -->
-            <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <path d="M10 7V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-1"
-                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-              <path d="M15 12H3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-              <path d="m6 9-3 3 3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <svg xmlns="http://www.w3.org/2000/svg"  v-else-if="it.icon === 'invitation'" width="22" height="22"  viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2" y="4" width="20" height="16" rx="2"/>
+              <path d="M2 6l10 7 10-7"/>
             </svg>
           </span>
 

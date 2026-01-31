@@ -54,36 +54,18 @@ db.exec(`
 );
 `);
 
-// Parse "username=... pass=..." records from a text file
-function parseUsersFile(text) {
-  const entries = text.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
-  const result = [];
-  for (const entry of entries) {
-    const userMatch = entry.match(/\busername\w*\s*[:=]\s*(\w+)/i);
-    const passMatch = entry.match(/\bpass(?:word)?\w*\s*[:=]\s*(\w+)/i);
-    if (userMatch && passMatch) {
-      result.push({ username: userMatch[1], password: passMatch[1] });
-    }
+// ---------- Schema migration helpers ----------
+function ensureColumn(table, column, typeSql) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all()
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`)
+    console.log(`✅ Added column ${table}.${column}`)
   }
-  return result;
 }
 
-// Insert a user if not already present
-function insertIfMissing(
-  username,
-  password,
-  flowers = 0,
-  focusTime = 25,
-  config = {},
-  isReal = 0
-) {
-  const exists = db.prepare("SELECT 1 FROM users WHERE username = ?").get(username);
-  if (!exists) {
-    db.prepare(
-      "INSERT INTO users (username, password, flowers, focus_time, config, is_real) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(username, password, flowers, focusTime, JSON.stringify(config), isReal);
-  }
-}
+ensureColumn("sessions", "ai_todos", "TEXT");
+ensureColumn("sessions", "ai_generated", "INTEGER DEFAULT 0");
+ensureColumn("sessions", "ended_at", "INTEGER");
 
 // Seed users: either from users.txt or defaults (1 real + 10 fake)
 function seedUsers() {
@@ -130,6 +112,94 @@ function seedUsers() {
 }
 
 seedUsers();
+
+function seedOtherUsersSessionsForTesting() {
+  // create only if none active (optional)
+  const already = db.prepare(`
+  SELECT COUNT(*) AS c
+  FROM sessions
+  WHERE ended_at IS NULL AND topic IN ('Algebra group', 'Physics drills', 'Chem revision')
+`).get().c
+
+if (already >= 3) {
+  console.log("ℹ️ Demo sessions already exist, skipping seed.")
+  return
+}
+
+
+  const now = Date.now()
+
+  // pick some fake users as admins
+  const admins = db.prepare("SELECT id, username FROM users WHERE is_real = 0 LIMIT 3").all()
+  if (admins.length === 0) return
+
+  const insert = db.prepare(`
+    INSERT INTO sessions (
+      id, privacy, topic, duration_hours, duration_minutes,
+      admin_user_id, start_time, invited_ids,
+      todos, personal_todos, ai_todos, ai_generated, ended_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  const demo = [
+    { topic: "Algebra group", privacy: "public", h: 1, m: 0, admin: admins[0] },
+    { topic: "Physics drills", privacy: "public", h: 0, m: 45, admin: admins[1] },
+    { topic: "Chem revision", privacy: "public", h: 2, m: 0, admin: admins[2] },
+  ]
+
+  for (const s of demo) {
+    insert.run(
+      generateSessionId(),
+      s.privacy,
+      s.topic,
+      s.h,
+      s.m,
+      s.admin.id,
+      now, // IMPORTANT: start now so it isn't expired
+      JSON.stringify([1, 2, 3, 5]), // invited friend ids
+      JSON.stringify([]),
+      JSON.stringify([]),
+      JSON.stringify([]),
+      0,
+      null
+    )
+  }
+
+  console.log("✅ Seeded other-users sessions for testing")
+}
+
+seedOtherUsersSessionsForTesting()
+
+// Parse "username=... pass=..." records from a text file
+function parseUsersFile(text) {
+  const entries = text.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
+  const result = [];
+  for (const entry of entries) {
+    const userMatch = entry.match(/\busername\w*\s*[:=]\s*(\w+)/i);
+    const passMatch = entry.match(/\bpass(?:word)?\w*\s*[:=]\s*(\w+)/i);
+    if (userMatch && passMatch) {
+      result.push({ username: userMatch[1], password: passMatch[1] });
+    }
+  }
+  return result;
+}
+
+// Insert a user if not already present
+function insertIfMissing(
+  username,
+  password,
+  flowers = 0,
+  focusTime = 25,
+  config = {},
+  isReal = 0
+) {
+  const exists = db.prepare("SELECT 1 FROM users WHERE username = ?").get(username);
+  if (!exists) {
+    db.prepare(
+      "INSERT INTO users (username, password, flowers, focus_time, config, is_real) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(username, password, flowers, focusTime, JSON.stringify(config), isReal);
+  }
+}
 
 // Helpers for sessions
 function getRealUserId() {
@@ -508,19 +578,6 @@ app.listen(port, () => {
   console.log(`✅ Server listening on http://localhost:${port}`);
 });
 
-
-// ---------- Schema migration helpers ----------
-function ensureColumn(table, column, typeSql) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all()
-  if (!cols.some(c => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`)
-    console.log(`✅ Added column ${table}.${column}`)
-  }
-}
-
-ensureColumn("sessions", "ai_todos", "TEXT");
-ensureColumn("sessions", "ai_generated", "INTEGER DEFAULT 0");
-ensureColumn("sessions", "ended_at", "INTEGER");
 // ---------- AI templates (static, deterministic) ----------
 app.post("/api/sessions/:id/ai/generate", (req, res) => {
   const id = req.params.id;
