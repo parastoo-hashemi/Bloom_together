@@ -498,10 +498,11 @@ app.put("/api/sessions/:id", (req, res) => {
     // - Private session: allow both session-level (todos) + personal (personal_todos)
     // - Public session: allow ONLY personal_todos; force todos to []
     if (sessionPrivacy === "public") {
+      console.log("todostodostodos", todos)
       if (todos !== undefined) {
         // Ignore client session todos in public sessions
         fields.push("todos = ?");
-        values.push(JSON.stringify([]));
+        values.push(JSON.stringify(todos));
       }
       if (personal_todos !== undefined) {
         fields.push("personal_todos = ?");

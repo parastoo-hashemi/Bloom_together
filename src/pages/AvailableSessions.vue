@@ -130,11 +130,11 @@ function onStart(_settings) {
           :title="s.title"
           :online-count="s.onlineCount"
           :ends-in-minutes="s.endsInMinutes"
-          :disabled="s.endsInMinutes > 15"
+          
           @enter="enterSession(s.id)"
         />
       </section>
-
+<!-- :disabled="s.endsInMinutes < 15" -->
       <div v-if="!loading && !error && filteredSessions.length === 0" class="mt-8 text-center text-sm text-black/50">
         No sessions match your filters.
       </div>
