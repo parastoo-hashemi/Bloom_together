@@ -85,6 +85,7 @@ onMounted(async () => {
       aiTodos: raw.ai_todos ?? [],
       adminUsername: raw.admin_username
     }
+    rebuildMembers(session.value.invitedFriendIds)
   } catch {
     router.replace("/host")
   } finally {
@@ -96,31 +97,63 @@ onMounted(async () => {
 const invitedIds = computed({
   get: () => session.value?.invitedFriendIds ?? [],
   set: async (ids) => {
-    if (!session.value) return
-    const prev = session.value.invitedFriendIds
-    session.value.invitedFriendIds = ids // optimistic UI update
-    try {
-      await apiUpdateSession(session.value.id, { invitedFriendIds: ids })
-    } catch (e) {
-      session.value.invitedFriendIds = prev // rollback
-      console.error(e)
-    }
-  },
+  if (!session.value) return
+  const prev = session.value.invitedFriendIds
+  session.value.invitedFriendIds = ids
+  rebuildMembers(ids) // ✅ keep UI in sync immediately
+  try {
+    await apiUpdateSession(session.value.id, { invitedFriendIds: ids })
+  } catch (e) {
+    session.value.invitedFriendIds = prev
+    rebuildMembers(prev) // rollback
+    console.error(e)
+  }
+},
 })
 
 
 // ================= MEMBERS (UI) =================
-const members = computed(() =>
-  invitedIds.value
+const membersState = ref([])
+const nowElapsedSec = ref(0) 
+
+function rebuildMembers(ids) {
+  const prevById = new Map((membersState.value ?? []).map(m => [m.id, m]))
+
+  const next = (ids ?? [])
     .map(id => userById(id))
     .filter(Boolean)
-    .map(u => ({
-      id: u.id,
-      name: u.name,
-      avatar: u.avatar,
-      progress: 0, // ✅ always start at 0
-    }))
-)
+    .map(u => {
+      const old = prevById.get(u.id)
+      return {
+        id: u.id,
+        name: u.name,
+        avatar: u.avatar,
+        progress: old?.progress ?? 0,
+        startAtSec: old?.startAtSec ?? null, // ✅ persist start schedule
+      }
+    })
+
+  // ✅ assign startAtSec ONLY for newly added members
+  // rule: new member should start after 5s from "first" => interpret as "5s from now"
+  // plus keep staggering if multiple new users are added at once
+  const existingMaxStart = Math.max(
+    -Infinity,
+    ...next.map(m => (typeof m.startAtSec === "number" ? m.startAtSec : -Infinity))
+  )
+
+  let k = 0
+  for (const m of next) {
+    if (typeof m.startAtSec !== "number") {
+      // start after 5 seconds from current moment, and stagger new ones
+      const base = Math.max(existingMaxStart, nowElapsedSec.value) + STAGGER_SEC
+      m.startAtSec = base + k * STAGGER_SEC
+      k++
+    }
+  }
+
+  membersState.value = next
+}
+const members = computed(() => membersState.value)
 
 
 
@@ -183,27 +216,44 @@ const freezeTimer = computed(() => sessionEnded.value || endModalOpen.value)
 const expiredHandled = ref(false)
 const timeUp = ref(false)
 
+
 function onTimerTick(payload) {
   if (freezeTimer.value) return
   timerPayload.value = payload
+
   const total = payload?.totalSec ?? 0
   const elapsed = payload?.elapsedSec ?? 0
+
+  nowElapsedSec.value = elapsed // ✅ critical for join scheduling
+
   lastProgress01.value = total > 0 ? clamp01(elapsed / total) : 0
+  updateFriendsProgress(elapsed, total)
 }
 
 async function onTimerExpired(payload) {
   if (expiredHandled.value) return
   expiredHandled.value = true
+
+  // If something already ended the session / opened modal, don't fight it
   if (freezeTimer.value) return
 
-
   timeUp.value = true
-  if (!allTodosDone.value && !sessionEnded.value) {
-    endSessionNow()
-    endScreen.value = 3
-    endModalOpen.value = true
-    await endAndExit()
+
+  // Timer finished => session ends, always
+  endSessionNow() // sets sessionEnded = true
+
+  // Pick screen based on completion
+  if (allTodosDone.value) {
+    endScreen.value = 1 // ✅ success
+  } else {
+    endScreen.value = 3 // ✅ failed/time up
   }
+
+  // Show modal
+  endModalOpen.value = true
+
+  // Persist end on backend
+  await endAndExit()
 }
 
 const timerStatsText = computed(() => {
@@ -219,6 +269,25 @@ const timerStatsText = computed(() => {
   }
   return `${fmt(p.elapsedSec)} / ${fmt(p.totalSec)}`
 })
+
+const STAGGER_SEC = 5
+function updateFriendsProgress(elapsedSec, totalSec) {
+  if (!totalSec || totalSec <= 0) return
+
+  for (const m of membersState.value ?? []) {
+    const start = typeof m.startAtSec === "number" ? m.startAtSec : 0
+
+    if (elapsedSec < start) {
+      m.progress = 0
+      continue
+    }
+
+    const denom = Math.max(1, totalSec - start)  // all finish at session end
+    const p01 = clamp01((elapsedSec - start) / denom)
+    m.progress = Math.round(p01 * 100)
+  }
+}
+
 
 // ================= DONE LOGIC =================
 function isTodoDone(t) {
@@ -256,15 +325,42 @@ function endSessionNow() {
   sessionEnded.value = true
 }
 
+const hasAnyTodos = computed(() => {
+  const a = sessionTodos.value ?? []
+  const b = personalTodos.value ?? []
+  const c = aiTodos.value ?? []
+  return (a.length + b.length + c.length) > 0
+})
+
 async function onEndSessionClick() {
-  if (timeUp.value && !allTodosDone.value) endScreen.value = 3
-  else if (allTodosDone.value){
-    await endAndExit() 
-    endScreen.value = 1
+  // If timer already expired and tasks not done => failed screen
+  if (timeUp.value && hasAnyTodos.value && !allTodosDone.value) {
+    endScreen.value = 3
+    endModalOpen.value = true
+    return
   }
-  else endScreen.value = 2
+
+  // Manual end BEFORE timer finishes:
+  // If there are NO todos => confirmation modal (screen 2)
+  if (!timeUp.value && !hasAnyTodos.value) {
+    endScreen.value = 2
+    endModalOpen.value = true
+    return
+  }
+
+  // If there ARE todos and they are all done => success
+  if (hasAnyTodos.value && allTodosDone.value) {
+    await endAndExit()
+    endScreen.value = 1
+    endModalOpen.value = true
+    return
+  }
+
+  // Otherwise (there are todos but not done) => confirmation modal (screen 2)
+  endScreen.value = 2
   endModalOpen.value = true
 }
+
 
 async function confirmEarlyExit() {
   endSessionNow()
@@ -360,6 +456,8 @@ onBeforeRouteLeave(async () => {
       :open="endModalOpen"
       :screen="endScreen"
       :title="session.topic || 'Session'"
+      :confirmTitle="session.topic || 'Session'"
+      :failedTitle="session.topic || 'Session'"
       :stats-text="timerStatsText"
       @close="endModalOpen = false"
       @confirmEnd="confirmEarlyExit"

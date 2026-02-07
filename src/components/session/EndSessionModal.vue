@@ -1,4 +1,5 @@
 <script setup>
+import FailedFlower from "@/components/icons/FailedFlower.vue"
 /**
  * Screens:
  * 1 = success (terminal) -> full screen
@@ -31,7 +32,7 @@ const props = defineProps({
   failedTitle: { type: String, default: "Math Session" },
   failedMessage: {
     type: String,
-    default: "Time is up — tasks were not completed.",
+    default: "Sorry, You are failed",
   },
   failedCta: { type: String, default: "Home Page" },
 
@@ -124,9 +125,9 @@ const isTerminal = () => props.screen === 1 || props.screen === 3
 
       <!-- Screen 3: FAILED / TIME UP -->
       <section v-else class="w-full max-w-sm">
-        <div class="mx-auto mb-4 h-24 w-24 rounded-full bg-black/10"></div>
+         <FailedFlower class="h-auto w-auto mx-auto mb-4" />
 
-        <div class="text-xl font-semibold">
+        <div class="text-xl font-semibold mt-4">
           {{ failedTitle }}
         </div>
 
