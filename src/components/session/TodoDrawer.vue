@@ -191,14 +191,14 @@ async function removeTask(id) {
           <div class="flex rounded-full bg-black/5 p-1">
             <button
               class="flex-1 rounded-full py-2 text-sm font-medium"
-              :class="mode === 'manual' ? 'bg-[#111] text-white' : 'text-black/70'"
+              :class="mode === 'manual' ? 'bg-[#57B884] text-white' : 'text-black/70'"
               @click="setMode('manual')"
             >
               Manual
             </button>
             <button
               class="flex-1 rounded-full py-2 text-sm font-medium"
-              :class="mode === 'ai' ? 'bg-[#111] text-white' : 'text-black/70'"
+              :class="mode === 'ai' ? 'bg-[#57B884] text-white' : 'text-black/70'"
               @click="setMode('ai')"
             >
               ✨ AI
@@ -208,15 +208,15 @@ async function removeTask(id) {
           <div v-if="mode === 'manual' && isAdmin" class="mt-3 flex gap-2">
             <button
               class="flex-1 rounded-full border py-2 text-xs font-semibold"
-              :class="manualScope === 'session' ? 'bg-[#111] text-white border-transparent' : 'bg-white text-black/70'"
+              :class="manualScope === 'session' ? 'bg-[#57B884] text-white border-transparent' : 'bg-white text-black/70'"
               @click="manualScope = 'session'"
             >
               Session
             </button>
 
-            <button
+            <button 
               class="flex-1 rounded-full border py-2 text-xs font-semibold"
-              :class="manualScope === 'personal' ? 'bg-[#111] text-white border-transparent' : 'bg-white text-black/70'"
+              :class="manualScope === 'personal' ? 'bg-[#57B884] text-white border-transparent' : 'bg-white text-black/70'"
               @click="manualScope = 'personal'"
             >
               Individual
@@ -237,7 +237,7 @@ async function removeTask(id) {
           </div>
 
           <!-- AI (placeholder for your next message UI) -->
-         <div v-else class="mt-4">
+         <div  v-else class="mt-4">
               <AiTodoPanel 
               :session-id="props.sessionId"
               :aiGenerated="props.isGenerate"

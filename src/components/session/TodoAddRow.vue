@@ -21,7 +21,7 @@ function submit() {
       placeholder="Add a task ...."
       @keydown.enter="submit"
     />
-    <button
+    <button style="background-color: #57B884;"
       class="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
       :disabled="!canAdd"
       @click="submit"
