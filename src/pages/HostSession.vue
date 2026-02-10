@@ -149,7 +149,7 @@ async function onStart(settings) {
       <div class="flex rounded-full bg-black/5 p-1">
         <button
           class="flex flex-1 items-center justify-center rounded-full py-2 text-sm font-medium"
-          :class="privacy === 'public' ? 'bg-[#111] text-white' : 'text-black'"
+          :class="privacy === 'public' ? 'bg-[#57B884] text-white' : 'text-black'"
           @click="privacy = 'public'"
           type="button"
         >
@@ -162,8 +162,8 @@ async function onStart(settings) {
 
         <button
           class="flex flex-1 items-center justify-center rounded-full py-2 text-sm font-medium"
-          :class="privacy === 'private' ? 'bg-[#111] text-white' : 'text-black'"
-          @click="privacy = 'private'"
+          :class="privacy === 'private' ? 'bg-[#57B884] text-white' : 'text-black'"
+          @click="privacy = 'private'" 
           type="button"
         >
           <PrivateIcon
@@ -199,7 +199,7 @@ async function onStart(settings) {
         </p>
 
         <button
-          :disabled="!canCreateSession || isSubmitting"
+          :disabled="!canCreateSession || isSubmitting" style="background-color: #57B884;"
           class="mt-2 w-full rounded-2xl bg-[#111] py-3 text-sm font-semibold text-white hover:bg-black/90
                  disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#111]"
           @click="createSession"

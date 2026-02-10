@@ -127,7 +127,7 @@ function start() {
             </button>
 
             <button
-              type="button"
+              type="button" style="background-color: #57B884;"
               class="rounded-xl bg-black py-2 text-sm font-semibold text-white"
               @click="start"
             >

@@ -410,7 +410,7 @@ onBeforeRouteLeave(async () => {
         @expired="onTimerExpired"
       />
 
-      <button
+      <button style="background-color: #57B884;"
         class="mx-auto mt-3 flex rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white"
         @click="openTodo"
         type="button"
@@ -418,7 +418,7 @@ onBeforeRouteLeave(async () => {
         To-Do List
       </button>
 
-      <button
+      <button style="background-color: #57B884;"
         class="mt-3 mb-2 w-full rounded-2xl bg-black py-3 text-sm font-semibold text-white"
         @click="onEndSessionClick"
         type="button"

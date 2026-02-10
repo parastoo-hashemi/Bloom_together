@@ -79,7 +79,7 @@ async function declineInvite(inv) {
             <!-- Actions -->
             <div class="flex items-center gap-3">
               <button
-                type="button"
+                type="button"  style="background-color: #57B884;"
                 class="grid h-11 w-11 place-items-center rounded-full bg-[#111] text-white hover:bg-black/90"
                 @click="acceptInvite(inv)"
                 aria-label="Accept"
@@ -94,7 +94,7 @@ async function declineInvite(inv) {
 
               <button
                 type="button"
-                class="grid h-11 w-11 place-items-center rounded-full bg-[#111] text-white hover:bg-black/90"
+                class="grid h-11 w-11 place-items-center rounded-full bg-[#57B884] text-white hover:bg-black/90"
                 @click="declineInvite(inv)"
                 aria-label="Decline"
                 title="Decline"
