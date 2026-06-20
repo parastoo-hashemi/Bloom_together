@@ -1,157 +1,136 @@
 # Bloom Together
 
-A full-stack collaborative focus session web application. Users create timed study or work sessions, manage shared and personal to-do lists within each session, and track their productivity through a visual garden that grows as sessions are completed successfully.
+A full-stack collaborative focus session app built to production-grade standards: JWT auth with silent token refresh, optimistic UI with rollback, PostgreSQL-backed session lifecycle, and a Socket.IO event layer primed for real-time client integration.
 
 ---
 
 ## Table of Contents
 
-- [Project Overview](#project-overview)
+- [Engineering Highlights](#engineering-highlights)
+- [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Features](#features)
-- [Architecture Overview](#architecture-overview)
 - [Project Structure](#project-structure)
-- [Setup Instructions](#setup-instructions)
+- [Getting Started](#getting-started)
 - [Environment Variables](#environment-variables)
 - [API Reference](#api-reference)
 - [Database Schema](#database-schema)
-- [Known Limitations & Future Work](#known-limitations--future-work)
+- [Screenshots](#screenshots)
+- [Known Limitations](#known-limitations)
 
 ---
 
-## Project Overview
+## Engineering Highlights
 
-Bloom Together lets users host or join timed focus sessions — either public (open to anyone) or private (invite-only). During a session, participants work through shared and personal to-do lists. When a session ends, the app determines whether it was successful (all todos completed) or not, then plants a flower in the user's garden with a bloom level reflecting how much of the session time was used.
+> The decisions that reflect how this project was designed, not just what it does.
 
-The garden acts as a persistent, visual record of a user's focus history — streaks, total blooms, and session topics are all tracked.
+**JWT auth with silent token refresh**
+Access tokens (15 min) are stored in Pinia memory — never `localStorage`. A shared `api()` helper in `src/Api/http.js` intercepts every `401`, silently calls `POST /auth/refresh` using an `HttpOnly` cookie, and retries the original request once before clearing auth state. The consumer never handles token logic.
+
+**Optimistic UI with rollback**
+All todo mutations — create, toggle, delete — update local state before the network request resolves. On failure, the previous state is restored and the error surfaced. No loading spinners on interactions the user already perceives as complete.
+
+**BIGINT/string boundary**
+`postgres.js` returns BIGINT columns as JavaScript strings. Every service function casts affected fields (`user_id`, `admin_id`, `start_time`, `ended_at`) to `Number()` before the response leaves the layer, preventing silent identity comparison bugs between JWT payload values and database IDs.
+
+**Idempotent migrations**
+SQL migrations use `IF NOT EXISTS` throughout and run automatically on server startup. Safe to replay against any database state; no migration state table or lock is required.
+
+**Socket.IO event layer**
+`member:joined`, `member:left`, `session:ended`, and `invitation:received` are emitted server-side after every relevant database commit, inside a `safeEmit` wrapper that swallows missing-instance errors. The HTTP response is never blocked by socket state.
+
+**Request validation at boundary**
+Zod schemas validate and strip all incoming request bodies at the route layer before any data reaches service functions. Unknown keys are removed; type errors return structured `400` responses with field-level messages.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────┐
+│         Vue 3 SPA (Browser)         │
+│  Pinia · Vue Router · Tailwind CSS  │
+└────────────────┬────────────────────┘
+                 │ fetch() + Bearer token
+                 │ Vite proxy: /api, /auth → :3001
+                 ▼
+┌─────────────────────────────────────┐
+│         Express 5  (:3001)          │
+│                                     │
+│  /auth/*        JWT auth lifecycle  │
+│  /api/sessions  CRUD + members      │
+│  /api/todos     Scoped todo CRUD    │
+│  /api/invitations  Lifecycle        │
+│  /api/garden    Bloom history       │
+│  /api/friends   Bot user pool       │
+└──────────┬──────────────┬───────────┘
+           │ SQL          │ emit (after commit)
+           ▼              ▼
+  ┌──────────────┐  ┌──────────────────┐
+  │ PostgreSQL   │  │   Socket.IO      │
+  │   (Docker)   │  │  session:{id}    │
+  │              │  │  user:{id} rooms │
+  └──────────────┘  └──────────────────┘
+```
+
+**Request flow:**
+1. `api(path, opts)` attaches the Bearer token and `credentials: 'include'` for the refresh cookie.
+2. On `401`: silently calls `POST /auth/refresh`, then retries. On a second `401`: clears auth state.
+3. Express validates the body with Zod, calls the service function, returns the result.
+4. Service functions write to PostgreSQL and emit Socket.IO events in the same logical flow.
 
 ---
 
 ## Tech Stack
 
 ### Frontend
-| Tool | Version | Purpose |
+
+| Tool | Version | Notes |
 |---|---|---|
-| Vue 3 | `^3.5` | UI framework, Composition API + `<script setup>` |
-| Pinia | `^3.0` | Global state (auth token, user identity) |
-| Vue Router 4 | `^4.6` | Client-side routing |
-| Vite (rolldown-vite) | `7.2.5` | Dev server, build tool |
-| Tailwind CSS | `^3.4` | Utility-first styling via PostCSS |
+| Vue 3 | `^3.5` | Composition API, `<script setup>` throughout |
+| Pinia | `^3.0` | Auth token stored in memory, not localStorage |
+| Vue Router 4 | `^4.6` | SPA routing with history mode |
+| Tailwind CSS | `^3.4` | Utility-first via PostCSS |
+| Vite (rolldown-vite) | `7.2.5` | Dev server + `/api` proxy to `:3001` |
 
 ### Backend
-| Tool | Version | Purpose |
+
+| Tool | Version | Notes |
 |---|---|---|
-| Node.js | ≥ 22 (ESM) | Runtime |
-| Express | `^5.2` | HTTP server and routing |
-| Socket.IO | `^4.8` | Real-time event emission (server-side) |
-| Zod | `^4.4` | Request body validation |
-| jsonwebtoken | `^9.0` | JWT issuance and verification |
-| bcryptjs | `^2.4` | Password hashing |
-| postgres (porsager) | `^3.4` | PostgreSQL client |
+| Node.js | ≥ 22 | Native ESM, `--env-file`, `--watch` |
+| Express | `^5.2` | Async error propagation built-in |
+| Zod | `^4.4` | Schema validation + unknown-key stripping at route boundary |
+| jsonwebtoken | `^9.0` | HS256 access + refresh tokens, separate secrets |
+| bcryptjs | `^2.4` | Password hashing at rest, cost factor 10 |
+| postgres (porsager) | `^3.4` | Tagged template literals; no ORM |
+| Socket.IO | `^4.8` | Event emission server-side; client not yet connected |
 
-### Database
-| Tool | Purpose |
-|---|---|
-| PostgreSQL 16 | Primary data store |
-| Custom migration runner | Sequential SQL migrations (`migrations/`) |
+### Database & Infrastructure
 
-### Infrastructure
-| Tool | Purpose |
+| Tool | Notes |
 |---|---|
-| Docker | Run PostgreSQL locally without a system install |
-| Node `--env-file` | Load `.env` for server without a third-party package |
-| Node `--watch` | Hot-restart the server during development |
+| PostgreSQL 16 | UUID primary keys for sessions, BIGINT identity for users |
+| Docker | Single `docker run` command; no local PostgreSQL install needed |
+| Custom migration runner | Sequential SQL files, idempotent, auto-run at startup |
 
 ---
 
 ## Features
 
-### Session Lifecycle
-- **Create a session** — choose public or private, set a topic, duration (up to 23h 59m), and optionally invite friends.
-- **Join a public session** — browse active public sessions filtered by duration or topic; join with one click.
-- **Join a private session** — receive an invitation, review session details, accept or decline.
-- **Session room** — timed view with a live flower growth animation reflecting elapsed time. Admin can add or remove members mid-session.
-- **End a session** — admin ends the session manually or the timer expires. The backend determines the outcome (success/failed) from todo state.
+**Session lifecycle**
+Users host or join timed focus sessions (public or private). Public sessions are immediately discoverable on the browse page. Private sessions require an invitation — the host selects participants, who receive a pending invite they can accept or decline. The backend determines session outcome (success/failed/abandoned) from todo completion state when the session ends, and records a `garden_flower` with a `bloom_level` proportional to elapsed time.
 
-### To-Do System
-Each session supports three scopes of todos:
-- **Session todos** — shared across all members, created and managed by the admin.
-- **Personal todos** — private to each member, visible only to themselves.
-- **AI-generated todos** — suggested task list based on the session topic (static generation; Anthropic API integration is optional).
+**Three-scope todo system**
+Each session carries three distinct todo scopes: `session` (shared across all members, admin-managed), `personal` (private per user), and `ai` (generated once per session, toggle-only). Todos are individual REST resources — create, toggle, and delete each go through separate API calls with optimistic local updates and rollback.
 
-Todos are created, toggled, and deleted via individual REST calls. Changes are optimistic in the UI with automatic rollback on failure.
+**Garden and streak tracking**
+Every ended session produces a `garden_flower` record. `bloom_level` is a `NUMERIC(4,3)` value between 0 and 1. The garden page groups flowers by recency. Streak is calculated from consecutive days with at least one successful bloom. `flowers_count` on the user record is incremented atomically — only on `outcome = 'success'`.
 
-### Garden & Bloom Tracking
-- Every ended session creates a `garden_flower` record with a `bloom_level` (0–1, computed from elapsed/total time) and an outcome (`success`, `failed`, or `abandoned`).
-- The garden page visualises successful flowers, grouped by last week, last month, or all time.
-- Streak calculation is based on consecutive days with at least one successful bloom.
-- `flowers_count` on the user record is incremented atomically for successful sessions only.
+**Invitation system**
+Creating a private session dispatches pending invitations to selected user IDs. Recipients see sessions with full detail (topic, duration, shared task list) before accepting. Accepting an invitation atomically inserts a row into `session_members` and emits `member:joined` to the session room.
 
-### Invitations
-- Private session creators send pending invitations to selected friends.
-- Recipients see pending invitations with session details (topic, duration, time remaining).
-- Accepting an invitation atomically adds the user to `session_members`.
-- Declining removes the invitation without affecting the session.
-
-### Friends
-- A fixed pool of bot users (role `= 'bot'`) acts as the friend list, visible to all authenticated users.
-- Used to populate the invite picker on session creation and the Add People modal in the session room.
-
-### Authentication
-- **Register / Login** — `POST /auth/register`, `POST /auth/login`.
-- **Access token** — short-lived JWT (15 min), stored in memory (Pinia store), attached to every API request as a `Bearer` token.
-- **Refresh token** — long-lived JWT (7 days), stored in an `HttpOnly` cookie. The frontend API helper silently refreshes on a 401 and retries the original request once.
-- **Socket.IO handshake** — sockets authenticate by passing the access token in `socket.handshake.auth.token`; unauthenticated connections are rejected before any event handler runs.
-
-### Real-Time (Server-Side)
-Socket.IO is fully wired on the backend. The following events are emitted after database writes:
-
-| Event | Room | Trigger |
-|---|---|---|
-| `invitation:received` | `user:{id}` | New pending invitation created |
-| `member:joined` | `session:{id}` | Member added via AddPeople or invitation accept |
-| `member:left` | `session:{id}` | Member removed via AddPeople |
-| `session:ended` | `session:{id}` | Session ended by admin or timer |
-
-The frontend does not yet connect a Socket.IO client — see [Known Limitations](#known-limitations--future-work).
-
----
-
-## Architecture Overview
-
-```
-Browser (Vue 3 SPA)
-    │
-    │  HTTP (fetch + Vite proxy /api → :3001, /auth → :3001)
-    │
-Express 5 server (server.js)
-    ├── /auth/*          Auth routes (register, login, refresh, me)
-    ├── /api/sessions    Session CRUD + member management
-    ├── /api/sessions    Todo CRUD (:id/todos, :id/todos/:todoId)
-    ├── /api/sessions    AI generation (:id/ai/generate)
-    ├── /api/invitations Invitation lifecycle
-    ├── /api/garden      User garden history
-    ├── /api/friends     Bot user list
-    └── /api/users       User profile
-    │
-PostgreSQL (Docker)
-    └── Tables: users, sessions, session_members, todos,
-               garden_flowers, invitations
-```
-
-**Request flow:**
-1. The frontend calls `api(path, options)` from `src/Api/http.js`.
-2. The helper attaches the Bearer token, sets `credentials: 'include'` for the refresh cookie, and parses the JSON response.
-3. On a `401`, it attempts `POST /auth/refresh` silently and retries once. On a second `401`, it clears the auth store.
-4. The Express route validates the request body with Zod, calls the relevant service function, and returns the result.
-5. Service functions write to the database via `postgres.js` and emit Socket.IO events after commits.
-
-**Key design choices:**
-- Migrations are idempotent (`IF NOT EXISTS`) and run automatically on server startup.
-- All BIGINT columns (`user_id`, `admin_id`, `start_time`, `ended_at`) are cast with `Number()` before leaving the service layer, because `postgres.js` returns BIGINTs as strings.
-- Session IDs are UUIDs; user IDs are BIGINT identity columns. UUID format is validated at the route level to prevent `22P02` database errors.
-- Zod schemas strip unknown keys before data reaches service functions.
-- Socket emissions use a `safeEmit` wrapper so a missing Socket.IO instance (e.g. during tests) never crashes the HTTP response.
+**Auth**
+Standard register/login with bcrypt-hashed passwords. Two-token strategy: short-lived access token in memory, long-lived refresh token in an `HttpOnly` cookie. Silent refresh is handled transparently by the API helper.
 
 ---
 
@@ -159,85 +138,55 @@ PostgreSQL (Docker)
 
 ```
 bloom_together/
-├── migrations/
-│   ├── 001_initial.sql          # users, sessions, session_members, todos
-│   └── 002_garden_invitations.sql # garden_flowers, invitations
+├── migrations/                 # SQL migration files (run in order at startup)
+│   ├── 001_initial.sql
+│   └── 002_garden_invitations.sql
 │
-├── server/
-│   ├── server.js                # Entry point: migrations → Express → HTTP → Socket.IO
-│   ├── app.js                   # Express factory (routes, middleware)
-│   ├── migrate.js               # CLI migration runner (npm run migrate)
-│   ├── shared/
-│   │   ├── db.js                # postgres.js connection pool
-│   │   ├── socket.js            # Socket.IO singleton (initSocket / getIO)
-│   │   ├── auth.middleware.js   # requireAuth — verifies JWT, attaches req.user
-│   │   ├── errors.js            # Custom error classes + global error handler
-│   │   └── migrations.js        # Migration runner logic
-│   └── modules/
-│       ├── auth/                # register, login, refresh, profile
-│       ├── users/               # user profile endpoints
-│       ├── friends/             # bot user list
-│       ├── sessions/            # session CRUD, member management, socket handlers
-│       ├── invitations/         # invitation lifecycle
-│       ├── todos/               # todo CRUD + socket handlers
-│       ├── garden/              # garden history
-│       └── ai/                  # AI todo generation (static fallback)
+├── server/                     # Express backend (Node.js ESM)
+│   ├── server.js               # Entry point: migrate → bind HTTP → init Socket.IO
+│   ├── app.js                  # Express factory, middleware, route mounting
+│   ├── shared/                 # db pool, auth middleware, error classes, socket singleton
+│   └── modules/                # One directory per domain
+│       ├── auth/               # register · login · refresh · /me
+│       ├── sessions/           # CRUD · member management · end
+│       ├── todos/              # Scoped todo CRUD
+│       ├── invitations/        # Create · accept · decline
+│       ├── garden/             # Bloom history
+│       ├── friends/            # Bot user pool
+│       ├── users/              # Profile
+│       └── ai/                 # Task generation (static fallback)
 │
-├── src/
-│   ├── main.js                  # App bootstrap (createPinia, createRouter, mount)
-│   ├── App.vue
-│   ├── router/index.js          # Route definitions
-│   ├── stores/auth.js           # Pinia auth store (user, accessToken)
-│   ├── Api/http.js              # api() helper with 401-refresh logic
-│   ├── pages/
-│   │   ├── Home.vue             # Dashboard: garden stats, streak, quick actions
-│   │   ├── HostSession.vue      # Create a public or private session
-│   │   ├── AvailableSessions.vue # Browse and join public sessions
-│   │   ├── Invitation.vue       # Pending invitation list
-│   │   ├── SessionRoom.vue      # Active session: timer, todos, members
-│   │   ├── Garden.vue           # Visual bloom history
-│   │   ├── Login.vue            # Login / register form
-│   │   └── IntroPage.vue        # Landing / splash page
-│   ├── components/
-│   │   ├── session/             # SessionTimer, TodoDrawer, AddPeopleModal,
-│   │   │                        # FlowerGrowth, EndSessionModal, AiTodoPanel, …
-│   │   ├── HostSession/         # StudyDuration, Topic, TodoList, InviteFriends, …
-│   │   ├── AvailableSessions/   # SessionCard, FilterBar
-│   │   ├── main/                # Header, NavBar
-│   │   └── icons/               # SVG icon components
-│   └── utils/
-│       └── flowerGrowth.js      # bloom progress utilities (clamp01, …)
+├── src/                        # Vue 3 frontend
+│   ├── Api/http.js             # api() helper — token attachment, silent refresh, retry
+│   ├── stores/auth.js          # Pinia auth store (user, accessToken)
+│   ├── router/index.js         # Route definitions
+│   ├── pages/                  # One .vue file per route
+│   └── components/             # session/ · HostSession/ · AvailableSessions/ · main/ · icons/
 │
-├── index.html
-├── vite.config.js               # Vite + dev proxy (/api, /auth → :3001)
-├── tailwind.config.js
-├── postcss.config.js
+├── screenshots/
+├── vite.config.js              # Dev proxy: /api + /auth → :3001
 └── package.json
 ```
 
 ---
 
-## Setup Instructions
+## Getting Started
 
 ### Prerequisites
+
 - Node.js ≥ 22
-- Docker (for PostgreSQL)
+- Docker
 - npm
 
-### 1. Clone the repository
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/parastoo-hashemi/Bloom_together.git
 cd Bloom_together
-```
-
-### 2. Install dependencies
-
-```bash
 npm install
 ```
 
-### 3. Start PostgreSQL with Docker
+### 2. Start PostgreSQL
 
 ```bash
 docker run -d --name bloom-pg \
@@ -247,58 +196,54 @@ docker run -d --name bloom-pg \
   postgres:16-alpine
 ```
 
-> If you prefer a different port, update `DATABASE_URL` in `.env` accordingly.
-
-### 4. Configure environment variables
+### 3. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in the required values (see [Environment Variables](#environment-variables) below). At minimum, set `DATABASE_URL`, `JWT_SECRET`, and `JWT_REFRESH_SECRET`.
+Edit `.env` with your values — see [Environment Variables](#environment-variables) below. At minimum set `DATABASE_URL`, `JWT_SECRET`, and `JWT_REFRESH_SECRET`.
 
-### 5. Run database migrations
+### 4. Run migrations
 
 ```bash
 npm run migrate
 ```
 
-This runs all SQL files in `migrations/` in order. The command is idempotent — safe to run multiple times.
+Migrations are idempotent — safe to run more than once.
 
-### 6. Start the backend
+### 5. Start the backend
 
 ```bash
 npm run server:dev
 ```
 
-The server starts on `http://localhost:3001` with `--watch` for auto-restart on file changes.
+Express starts on `http://localhost:3001` with `--watch`.
 
-### 7. Start the frontend
-
-In a separate terminal:
+### 6. Start the frontend
 
 ```bash
 npm run dev
 ```
 
-The Vite dev server starts on `http://localhost:5173`. Requests to `/api/*` and `/auth/*` are proxied automatically to the backend.
+Vite starts on `http://localhost:5173`. `/api/*` and `/auth/*` requests are proxied to `:3001` automatically.
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string. Example: `postgresql://postgres:postgres@localhost:5432/bloom` |
-| `JWT_SECRET` | Yes | — | Secret for signing short-lived access tokens (15 min). Use a random 64-byte hex string. |
-| `JWT_REFRESH_SECRET` | Yes | — | Secret for signing long-lived refresh tokens (7 days). Must be different from `JWT_SECRET`. |
-| `ANTHROPIC_API_KEY` | No | — | If set, may be used by the AI module in future. Currently the AI endpoint returns static task templates regardless. |
-| `PORT` | No | `3001` | Port the Express server listens on. |
-| `CLIENT_ORIGIN` | No | `http://localhost:5173` | Allowed CORS origin for the browser client and Socket.IO. |
-| `VITE_DEV_USERNAME` | No | `mario` | **Dev only.** Username for the auto-login fallback in each page (bypasses the login UI). Remove when a real auth flow is wired up. |
-| `VITE_DEV_PASSWORD` | No | `12341234` | **Dev only.** Password for the auto-login fallback. |
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | e.g. `postgresql://postgres:postgres@localhost:5432/bloom` |
+| `JWT_SECRET` | Yes | Signs 15-minute access tokens. Use a 64-byte random hex string. |
+| `JWT_REFRESH_SECRET` | Yes | Signs 7-day refresh tokens. Must differ from `JWT_SECRET`. |
+| `PORT` | No | Express port. Default: `3001`. |
+| `CLIENT_ORIGIN` | No | CORS allowed origin. Default: `http://localhost:5173`. |
+| `ANTHROPIC_API_KEY` | No | Reserved for AI module. Currently unused — endpoint returns static templates. |
+| `VITE_DEV_USERNAME` | No | Dev-only auto-login username. Remove before any multi-user deployment. |
+| `VITE_DEV_PASSWORD` | No | Dev-only auto-login password. |
 
-Generate strong secrets:
+Generate secrets:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
@@ -308,29 +253,29 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 
 ## API Reference
 
-All `/api/*` routes require a valid `Authorization: Bearer <accessToken>` header.
+All `/api/*` routes require `Authorization: Bearer <accessToken>`.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/auth/register` | Create a new user account |
-| `POST` | `/auth/login` | Authenticate and receive tokens |
-| `POST` | `/auth/refresh` | Issue a new access token from the refresh cookie |
-| `GET` | `/auth/me` | Return the authenticated user's profile |
-| `GET` | `/api/friends` | List all bot users (friend pool) |
-| `GET` | `/api/sessions` | List active sessions (query: `privacy`, `minMinutes`) |
-| `POST` | `/api/sessions` | Create a session; sends invitations to `invited_ids` |
-| `GET` | `/api/sessions/:id` | Get session details including members array |
+| `POST` | `/auth/register` | Create account |
+| `POST` | `/auth/login` | Authenticate; sets refresh cookie |
+| `POST` | `/auth/refresh` | Issue new access token from refresh cookie |
+| `GET` | `/auth/me` | Authenticated user profile |
+| `GET` | `/api/friends` | Bot user pool (invitation picker) |
+| `GET` | `/api/sessions` | List active sessions (`privacy`, `minMinutes` filters) |
+| `POST` | `/api/sessions` | Create session; dispatches invitations to `invited_ids` |
+| `GET` | `/api/sessions/:id` | Session detail with members array |
 | `PUT` | `/api/sessions/:id` | Update topic, duration, or member list (admin only) |
-| `POST` | `/api/sessions/:id/end` | End the session; creates a garden flower (admin only) |
-| `GET` | `/api/sessions/:id/todos` | List todos grouped by scope |
-| `POST` | `/api/sessions/:id/todos` | Create a todo (`scope`: `session` or `personal`) |
+| `POST` | `/api/sessions/:id/end` | End session; creates garden flower (admin only) |
+| `GET` | `/api/sessions/:id/todos` | All todos grouped by scope |
+| `POST` | `/api/sessions/:id/todos` | Create todo (`scope`: `session` or `personal`) |
 | `PUT` | `/api/sessions/:id/todos/:todoId` | Toggle done or update text |
-| `DELETE` | `/api/sessions/:id/todos/:todoId` | Delete a todo |
-| `POST` | `/api/sessions/:id/ai/generate` | Generate a static AI todo list (admin only) |
-| `GET` | `/api/invitations` | List pending invitations for the caller |
-| `PUT` | `/api/invitations/:id/accept` | Accept an invitation; joins `session_members` |
-| `PUT` | `/api/invitations/:id/decline` | Decline an invitation |
-| `GET` | `/api/garden` | Return the caller's flower history and `flowers_count` |
+| `DELETE` | `/api/sessions/:id/todos/:todoId` | Delete todo |
+| `POST` | `/api/sessions/:id/ai/generate` | Generate AI task list (admin only) |
+| `GET` | `/api/invitations` | Pending invitations for caller |
+| `PUT` | `/api/invitations/:id/accept` | Accept; inserts into `session_members` |
+| `PUT` | `/api/invitations/:id/decline` | Decline |
+| `GET` | `/api/garden` | Caller's flower history and `flowers_count` |
 
 ---
 
@@ -342,84 +287,107 @@ users
   username      TEXT UNIQUE NOT NULL
   email         TEXT UNIQUE
   password_hash TEXT NOT NULL
-  role          TEXT ('user' | 'bot')
+  role          TEXT  -- 'user' | 'bot'
   avatar_url    TEXT
   flowers_count INTEGER DEFAULT 0
 
 sessions
-  id             UUID PK DEFAULT gen_random_uuid()
-  privacy        TEXT ('public' | 'private')
+  id             UUID PK  -- gen_random_uuid()
+  privacy        TEXT     -- 'public' | 'private'
   topic          TEXT
   duration_hours INTEGER
   duration_mins  INTEGER
   admin_id       BIGINT → users.id
-  start_time     BIGINT (epoch ms)
-  ended_at       BIGINT (epoch ms, NULL while active)
+  start_time     BIGINT   -- epoch ms
+  ended_at       BIGINT   -- epoch ms; NULL = active
   ai_generated   BOOLEAN
   quiz_questions JSONB
 
 session_members
-  session_id  UUID → sessions.id  (CASCADE)
+  session_id  UUID   → sessions.id  CASCADE
   user_id     BIGINT → users.id
-  PK (session_id, user_id)
+  PRIMARY KEY (session_id, user_id)
 
 todos
   id          UUID PK
-  session_id  UUID → sessions.id (CASCADE)
-  owner_id    BIGINT → users.id (NULL for session-scoped)
-  scope       TEXT ('session' | 'personal' | 'ai')
+  session_id  UUID   → sessions.id  CASCADE
+  owner_id    BIGINT → users.id     -- NULL for session-scoped todos
+  scope       TEXT   -- 'session' | 'personal' | 'ai'
   text        TEXT
   done        BOOLEAN DEFAULT FALSE
-  immutable   BOOLEAN DEFAULT FALSE
+  immutable   BOOLEAN DEFAULT FALSE  -- AI todos: text locked after generation
   position    INTEGER
 
 garden_flowers
   id          UUID PK
   user_id     BIGINT → users.id
-  session_id  UUID → sessions.id
+  session_id  UUID   → sessions.id
   topic       TEXT
-  bloom_level NUMERIC(4,3) [0, 1]
-  outcome     TEXT ('success' | 'failed' | 'abandoned')
+  bloom_level NUMERIC(4,3)  -- [0, 1]; elapsed ÷ total duration
+  outcome     TEXT          -- 'success' | 'failed' | 'abandoned'
   ended_at    TIMESTAMPTZ
 
 invitations
   id          UUID PK
-  session_id  UUID → sessions.id (CASCADE)
+  session_id  UUID   → sessions.id  CASCADE
   from_id     BIGINT → users.id
   to_id       BIGINT → users.id
-  status      TEXT ('pending' | 'accepted' | 'declined')
+  status      TEXT   -- 'pending' | 'accepted' | 'declined'
 ```
 
 ---
 
-## Known Limitations & Future Work
+## Screenshots
 
-### Not Yet Implemented
+<table>
+  <tr>
+    <td align="center" valign="top">
+      <img src="screenshots/session%20room.png" width="220"/><br/>
+      <sub><b>Session room</b><br/>Live timer, flower growth animation, and member list. The richest screen in the app.</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="screenshots/add%2C%20remove%20session%20tasks%20by%20admin%20(private).png" width="220"/><br/>
+      <sub><b>Shared task list</b><br/>Admin-managed session todos in a private session. Three scopes: session, personal, AI.</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="screenshots/host%20page(private).png" width="220"/><br/>
+      <sub><b>Create session</b><br/>Private session form — invite friends and pre-populate shared tasks before starting.</sub>
+    </td>
+  </tr>
+</table>
 
-- **Frontend Socket.IO client** — The backend is fully wired: `member:joined`, `member:left`, `session:ended`, and `invitation:received` events are emitted after every relevant database write. However, the Vue frontend does not yet connect a `socket.io-client` instance. Session rooms and invitation pages currently rely on the initial HTTP load only — live updates require a page refresh.
-
-- **Real authentication flow** — A `Login.vue` page exists and the `/auth/login` and `/auth/register` endpoints are fully functional. The frontend pages currently bypass it with a dev-only auto-login helper (`ensureToken`) that silently authenticates as a hardcoded user. This must be replaced with navigation guards and a proper login redirect before a multi-user deployment.
-
-- **AI todo generation** — `POST /api/sessions/:id/ai/generate` returns a static list of task templates. The `ANTHROPIC_API_KEY` environment variable is accepted but currently unused. The `AiTodoPanel` component also calls with a hardcoded base URL and no auth header, making the AI tab non-functional in its current form.
-
-### UI Gaps
-
-- The `NavBar` component is imported but not rendered in `HostSession.vue` and `AvailableSessions.vue`, so those pages lack bottom navigation.
-- The "End The Session" button is visible to all session members. The backend correctly rejects non-admin end requests with a `403`, but the button ideally should be hidden from non-admins entirely.
-
-### Possible Improvements
-
-- Add `socket.io-client` to the frontend and implement live member presence and invitation badge updates.
-- Add a navigation guard in Vue Router to redirect unauthenticated users to `/login`.
-- Integrate the Anthropic API for real AI-generated todo lists based on session topic.
-- Persist a user's real friend connections rather than using a shared bot user pool.
-- Add quiz functionality (`quiz_questions` column exists in the schema but is not yet surfaced in the UI).
-- Rotate refresh tokens on each use to reduce the window for token replay attacks.
+<table>
+  <tr>
+    <td align="center" valign="top">
+      <img src="screenshots/available%20sessions.png" width="220"/><br/>
+      <sub><b>Browse sessions</b><br/>Active public sessions with topic and duration filter.</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="screenshots/generated%20AI%20tasks.png" width="220"/><br/>
+      <sub><b>AI task panel</b><br/>Generated once per session. AI todos are immutable after creation — only done state can be toggled.</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="screenshots/Garden.png" width="220"/><br/>
+      <sub><b>Garden</b><br/>One flower per successful session. Bloom level reflects elapsed-to-total time ratio. Drives streak counter.</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
-## Final Notes
+## Known Limitations
 
-Bloom Together is a full-stack learning project built to production-grade standards: proper JWT auth with HttpOnly refresh cookies, Zod-validated request bodies, idempotent database migrations, atomic transactions for critical writes, and a module-per-domain backend structure. The frontend uses the Vue 3 Composition API throughout with optimistic UI updates and rollback on failure.
+These are documented accurately — they reflect decisions not yet made, not oversights.
 
-The project is suitable as a portfolio piece demonstrating end-to-end API integration, real-time architecture preparation, and a complete session-based product flow from creation through to garden history.
+**Frontend Socket.IO client not connected**
+The server emits `member:joined`, `member:left`, `session:ended`, and `invitation:received` after every relevant database write. The Vue frontend does not yet connect a `socket.io-client` instance. Live updates require a page refresh. Wiring the client is the highest-priority next step.
+
+**Dev-only auth bypass**
+`Login.vue` and all `/auth/*` endpoints are fully implemented, but each page component currently calls a dev-only `ensureToken()` helper that silently authenticates as a hardcoded user. Vue Router navigation guards and a proper unauthenticated redirect are needed before multi-user deployment.
+
+**AI todo generation returns static content**
+`POST /api/sessions/:id/ai/generate` returns a fixed task list regardless of topic. `ANTHROPIC_API_KEY` is wired into the environment but unused. The `AiTodoPanel` component also uses a hardcoded base URL without an auth header, making the AI tab non-functional end-to-end in its current form.
+
+**Minor UI gaps**
+- `NavBar` is not rendered on `HostSession.vue` and `AvailableSessions.vue`.
+- The "End Session" button is visible to all members. The backend rejects non-admin requests with `403`, but the button should be conditionally hidden on the frontend.
