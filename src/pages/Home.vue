@@ -28,7 +28,7 @@ async function ensureToken() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username: import.meta.env.VITE_DEV_USERNAME ?? "mario",
-        password: import.meta.env.VITE_DEV_PASSWORD ?? "12345",
+        password: import.meta.env.VITE_DEV_PASSWORD ?? "12341234",
       }),
     })
     if (res.ok) {
