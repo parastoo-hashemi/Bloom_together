@@ -1,6 +1,9 @@
 <script setup>
-import { computed, ref } from "vue"
+import { computed, onMounted, ref } from "vue"
 import { useRouter } from "vue-router"
+
+import { useAuthStore } from "@/stores/auth.js"
+import { api } from "@/Api/http.js"
 
 // UI components
 import Header from "../components/main/Header.vue"
@@ -13,49 +16,35 @@ import InviteFriends from "../components/HostSession/InviteFriends.vue"
 import NavBar from "../components/main/NavBar.vue"
 import ConfirmStartModal from "@/components/HostSession/ConfirmStartModal.vue"
 
-// ---------------------------
-//  API client (fetch)
-// ---------------------------
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001"
+const router = useRouter()
+const authStore = useAuthStore()
 
-async function apiCreateSession(payload) {
-  const res = await fetch(`${API_BASE}/api/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  })
-
-  if (!res.ok) {
-    let msg = `Failed to create session (${res.status})`
-    try {
-      const err = await res.json()
-      if (err?.error) msg = err.error
-    } catch {
-      // ignore
+async function ensureToken() {
+  if (authStore.accessToken) return
+  try {
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: import.meta.env.VITE_DEV_USERNAME ?? "mario",
+        password: import.meta.env.VITE_DEV_PASSWORD ?? "12341234",
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      authStore.setAuth(data.user, data.accessToken)
     }
-    throw new Error(msg)
-  }
-
-  return await res.json() // { id }
+  } catch { /* backend unreachable */ }
 }
 
 // ---------------------------
 //  State
 // ---------------------------
-const router = useRouter()
-
-// Default tab (match your screenshot logic)
 const privacy = ref("public") // "public" | "private"
 
-// Demo friends (replace later with GET /api/friends)
-const friends = ref([
-  { id: 1, name: "Daniel", avatar: "https://i.pravatar.cc/64?img=12", email: "daniel@info.com" },
-  { id: 2, name: "John", avatar: "https://i.pravatar.cc/64?img=3", email: "john@info.com" },
-  { id: 3, name: "Nat", avatar: "https://i.pravatar.cc/64?img=5", email: "nat@info.com" },
-  { id: 4, name: "Sam", avatar: "https://i.pravatar.cc/64?img=8", email: "sam@info.com" },
-  { id: 5, name: "Sara", avatar: "https://i.pravatar.cc/64?img=9", email: "sara@info.com" },
-  { id: 6, name: "Mina", avatar: "https://i.pravatar.cc/64?img=10", email: "mina@info.com" },
-])
+// Loaded from GET /api/friends — mapped to { id, name, avatar } for InviteFriends
+const friends = ref([])
 
 
 // Separate state per tab
@@ -91,8 +80,28 @@ const hasTopic = computed(() => form.value.topic.trim().length > 0)
 const hasFriend = computed(() => form.value.selectedFriendIds.length > 0)
 const hasTodo = computed(() => privacy.value !== "private" || (form.value.todos?.length > 0))
 
+// Public: friends optional. Private: friends + todos required.
 const canCreateSession = computed(() => {
+  if (privacy.value === "public") return hasDuration.value && hasTopic.value
   return hasDuration.value && hasTopic.value && hasFriend.value && hasTodo.value
+})
+
+// ---------------------------
+//  Load friends on mount
+// ---------------------------
+onMounted(async () => {
+  await ensureToken()
+  try {
+    // GET /api/friends → { data: [{ id, username, avatar_url }] }
+    const { data } = await api("/api/friends")
+    friends.value = (data ?? []).map(f => ({
+      id:     f.id,
+      name:   f.username,
+      avatar: f.avatar_url ?? null,
+    }))
+  } catch {
+    friends.value = []
+  }
 })
 
 // ---------------------------
@@ -114,22 +123,17 @@ async function onStart(settings) {
   isSubmitting.value = true
 
   try {
-    const payload = {
-      privacy: privacy.value,
-      duration: { hours: form.value.hours, minutes: form.value.minutes },
-      topic: form.value.topic.trim(),
-      invitedFriendIds: form.value.selectedFriendIds,
-      // Store todos only for private sessions (as your UI implies)
-      todos: privacy.value === "private" ? form.value.todos : [],
-      // Keep it empty for now; your backend supports it but UI doesn't yet
-      personal_todos: [],
-      settings,
-      createdAt: Date.now(),
-    }
+    // POST /api/sessions → { id, topic, start_time }
+    const { id } = await api("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        privacy:     privacy.value,
+        topic:       form.value.topic.trim(),
+        duration:    { hours: form.value.hours, minutes: form.value.minutes },
+        invited_ids: form.value.selectedFriendIds.map(Number),
+      }),
+    })
 
-    const { id } = await apiCreateSession(payload)
-
-    // Backend is source of truth: navigate using backend session id
     router.push({ name: "session-room", params: { id } })
   } catch (e) {
     submitError.value = e instanceof Error ? e.message : "Failed to create session"

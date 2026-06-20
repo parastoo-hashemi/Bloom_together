@@ -45,7 +45,6 @@ const emit = defineEmits([
           class="bg-transparent text-sm font-semibold outline-none"
         >
           <option :value="0">00</option>
-          <option :value="1">1</option>
           <option :value="5">05</option>
           <option :value="10">10</option>
           <option :value="15">15</option>

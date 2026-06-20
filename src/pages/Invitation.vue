@@ -2,11 +2,13 @@
 import { computed, onMounted, ref } from "vue"
 import { useRouter } from "vue-router"
 
+import { useAuthStore } from "@/stores/auth.js"
 import { api } from "@/Api/http.js"
 import Header from "@/components/main/Header.vue"
 import NavBar from "@/components/main/NavBar.vue"
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const invitations = ref([])
 const loading = ref(false)
@@ -15,24 +17,46 @@ const selectedInvitation = ref(null)
 
 const hasInvitations = computed(() => invitations.value.length > 0)
 
+async function ensureToken() {
+  if (authStore.accessToken) return
+  try {
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: import.meta.env.VITE_DEV_USERNAME ?? "mario",
+        password: import.meta.env.VITE_DEV_PASSWORD ?? "12341234",
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      authStore.setAuth(data.user, data.accessToken)
+    }
+  } catch { /* backend unreachable */ }
+}
+
 async function loadInvitations() {
   loading.value = true
   error.value = ""
 
+  await ensureToken()
+
   try {
-    const response = await api("/api/demo/invitations")
+    // GET /api/invitations → { data: [{ id, session, from, status, created_at }] }
+    const response = await api("/api/invitations")
     const rows = Array.isArray(response?.data) ? response.data : []
 
-    invitations.value = rows.map((invitation) => ({
-      id: invitation.id,
-      sessionId: invitation.sessionId ?? invitation.id,
-      title: invitation.title || "Private Study Session",
-      privacy: invitation.privacy || "private",
-      adminName: invitation.adminName || "A friend",
-      duration: invitation.duration || { hours: 1, minutes: 0 },
-      startTime: invitation.start_time ?? invitation.startTime ?? Date.now(),
-      tasks: Array.isArray(invitation.tasks) ? invitation.tasks : [],
-      friends: Array.isArray(invitation.friends) ? invitation.friends : [],
+    invitations.value = rows.map((inv) => ({
+      id:        inv.id,
+      sessionId: inv.session.id,
+      title:     inv.session.topic || "Private Study Session",
+      privacy:   inv.session.privacy,
+      adminName: inv.from.username,
+      duration:  inv.session.duration,       // { hours, minutes }
+      startTime: inv.session.start_time,     // Unix ms number
+      tasks:     [],                         // not included in invitation response
+      friends:   [],
     }))
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Failed to load invitations"
@@ -89,12 +113,25 @@ function closeJoinModal() {
 
 async function joinInvite(invitation) {
   selectedInvitation.value = null
-  invitations.value = invitations.value.filter((item) => item.id !== invitation.id)
-  router.push({ name: "session-room", params: { id: invitation.sessionId } })
+  try {
+    // Accept on the backend first — returns { session_id }
+    const { session_id } = await api(`/api/invitations/${invitation.id}/accept`, { method: "PUT" })
+    invitations.value = invitations.value.filter((item) => item.id !== invitation.id)
+    router.push({ name: "session-room", params: { id: session_id } })
+  } catch (err) {
+    console.error("Failed to join session:", err.message)
+    invitations.value = invitations.value.filter((item) => item.id !== invitation.id)
+  }
 }
 
 async function declineInvite(invitation) {
-  invitations.value = invitations.value.filter((item) => item.id !== invitation.id)
+  try {
+    await api(`/api/invitations/${invitation.id}/decline`, { method: "PUT" })
+  } catch (err) {
+    console.error("Failed to decline invitation:", err.message)
+  } finally {
+    invitations.value = invitations.value.filter((item) => item.id !== invitation.id)
+  }
 }
 
 onMounted(loadInvitations)

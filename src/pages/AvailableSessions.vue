@@ -2,6 +2,8 @@
 import { computed, ref, onMounted, onBeforeUnmount } from "vue"
 import { useRouter } from "vue-router"
 
+import { useAuthStore } from "@/stores/auth.js"
+import { api } from "@/Api/http.js"
 import Header from "../components/main/Header.vue"
 import NavBar from "../components/main/NavBar.vue"
 import SessionCard from "../components/AvailableSessions/SessionCard.vue"
@@ -9,6 +11,7 @@ import FilterBar from "../components/AvailableSessions/FilterBar.vue"
 import ConfirmStartModal from "@/components/HostSession/ConfirmStartModal.vue"
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 // Filter states
 const durationFilter = ref("all") // "all" | "30" | "60" | "120"
@@ -23,13 +26,32 @@ const error = ref("")
 const now = ref(Date.now())
 let tick = null
 
+async function ensureToken() {
+  if (authStore.accessToken) return
+  try {
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: import.meta.env.VITE_DEV_USERNAME ?? "mario",
+        password: import.meta.env.VITE_DEV_PASSWORD ?? "12341234",
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      authStore.setAuth(data.user, data.accessToken)
+    }
+  } catch { /* backend unreachable */ }
+}
+
 async function loadSessions() {
   loading.value = true
   error.value = ""
+  await ensureToken()
   try {
-    const res = await fetch("http://localhost:3001/api/sessions")
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const json = await res.json()
+    // GET /api/sessions → { data: [{ id, topic, privacy, duration, admin, start_time, member_count }] }
+    const json = await api("/api/sessions?privacy=public")
     rawSessions.value = Array.isArray(json.data) ? json.data : []
   } catch (e) {
     error.value = e?.message || "Failed to load sessions"
@@ -71,9 +93,9 @@ const sessions = computed(() => {
         id: s.id,
         title,
         endsInMinutes,
-        onlineCount: Array.isArray(s.invited_ids) ? s.invited_ids.length : 0,
+        onlineCount: s.member_count ?? 0,
         privacy: s.privacy,
-        admin_username: s.admin_username,
+        admin_username: s.admin?.username ?? "",
       }
     })
     .filter((s) => s.endsInMinutes > 0)
@@ -110,7 +132,7 @@ function onStart(_settings) {
 
 <template>
   <div class="min-h-screen bg-[#F7FAF8] text-black">
-    <Header title="Available Session" subtitle="Join a co-study room" />
+    <Header title="Available Session" subtitle="Join a public co-study room" />
 
     <main class="mx-auto max-w-screen-md px-4 pb-28 pt-16">
       <FilterBar v-model:duration="durationFilter" v-model:query="searchQuery" />

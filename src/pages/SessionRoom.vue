@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
 
+import { useAuthStore } from "@/stores/auth.js"
+import { api } from "@/Api/http.js"
 import SessionTimer from "@/components/session/SessionTimer.vue"
 import FlowerGrowth from "@/components/session/FlowerGrowth.vue"
 import TodoDrawer from "@/components/session/TodoDrawer.vue"
@@ -12,53 +14,25 @@ import FriendsProgressFlowers from "@/components/session/FriendsProgressFlowers.
 import { clamp01 } from "@/utils/flowerGrowth"
 import { onBeforeRouteLeave } from "vue-router"
 
-// ================= API =================
-const API_BASE = "http://localhost:3001"
+const authStore = useAuthStore()
 
-async function apiGetSession(id) {
-  const r = await fetch(`${API_BASE}/api/sessions/${id}`)
-  if (!r.ok) throw new Error("load failed")
-  return r.json()
-}
-
-async function apiUpdateSession(id, patch) {
-  const r = await fetch(`${API_BASE}/api/sessions/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  })
-  if (!r.ok) throw new Error("update failed")
-}
-
-async function apiEndSession(id, success = false) {
-  const r = await fetch(`${API_BASE}/api/sessions/${id}/end`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ success }),
-  })
-  if (!r.ok) throw new Error("end failed")
-}
-
-async function persist(patch, rollback) {
-  if (!session.value?.id) return
+async function ensureToken() {
+  if (authStore.accessToken) return
   try {
-    await apiUpdateSession(session.value.id, patch)
-  } catch (e) {
-    rollback?.()
-    console.error(e)
-  }
-}
-
-const endTriggered = ref(false)
-
-async function endAndExit(success = false) {
-  if (endTriggered.value || !session.value?.id) return
-  endTriggered.value = true
-  try {
-    await apiEndSession(session.value.id, success)
-  } catch (e) {
-    console.error(e)
-  }
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: import.meta.env.VITE_DEV_USERNAME ?? "mario",
+        password: import.meta.env.VITE_DEV_PASSWORD ?? "12341234",
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      authStore.setAuth(data.user, data.accessToken)
+    }
+  } catch { /* backend unreachable */ }
 }
 
 // ================= ROUTE =================
@@ -66,40 +40,70 @@ const route = useRoute()
 const router = useRouter()
 const sessionId = String(route.params.id)
 
-// ================= STATIC USERS =================
-const allUsers = ref([
-  { id: 1, name: "Daniel", avatar: "https://i.pravatar.cc/64?img=12" },
-  { id: 2, name: "John", avatar: "https://i.pravatar.cc/64?img=3" },
-  { id: 3, name: "Nat", avatar: "https://i.pravatar.cc/64?img=5" },
-  { id: 4, name: "Sam", avatar: "https://i.pravatar.cc/64?img=8" },
-  { id: 5, name: "Sara", avatar: "https://i.pravatar.cc/64?img=9" },
-  { id: 6, name: "Mina", avatar: "https://i.pravatar.cc/64?img=10" },
-])
+// ================= FRIENDS (options for AddPeopleModal) =================
+// Loaded from GET /api/friends, mapped to { id, name, avatar }
+const allUsers = ref([])
 
-const userById = (id) => allUsers.value.find(u => u.id === id)
+// ================= SESSION MEMBERS =================
+// Current members from backend: [{ id, username, avatar_url }]
+const sessionMembers = ref([])
+
+// Unified lookup: id → { id, name, avatar }
+const userInfoById = computed(() => {
+  const map = new Map()
+  allUsers.value.forEach(u => map.set(u.id, u))
+  sessionMembers.value.forEach(u =>
+    map.set(u.id, { id: u.id, name: u.username, avatar: u.avatar_url ?? null })
+  )
+  return map
+})
 
 // ================= SESSION =================
 const session = ref(null)
 const loading = ref(true)
 
+// True when the logged-in user is the session admin
+const isAdmin = computed(() =>
+  session.value !== null &&
+  authStore.user?.id != null &&
+  Number(authStore.user.id) === session.value.adminId
+)
+
 onMounted(async () => {
   if (!sessionId) return router.replace("/host")
+  await ensureToken()
   try {
-    const raw = await apiGetSession(sessionId)
+    // Load session, todos, and friends in parallel
+    const [raw, todosData, friendsData] = await Promise.all([
+      api(`/api/sessions/${sessionId}`),
+      api(`/api/sessions/${sessionId}/todos`),
+      api("/api/friends"),
+    ])
+
     session.value = {
-      id: raw.id,
-      topic: raw.topic,
-      privacy: raw.privacy,
-      duration: raw.duration,
-      startTime: raw.start_time ?? null,
-      invitedFriendIds: raw.invited_ids ?? [],
-      todos: raw.todos ?? [],
-      personalTodos: raw.personal_todos ?? [],
-      aiGenerated: raw.ai_generated === true,
-      aiTodos: raw.ai_todos ?? [],
-      adminUsername: raw.admin_username
+      id:           raw.id,
+      topic:        raw.topic,
+      privacy:      raw.privacy,
+      duration:     raw.duration,
+      startTime:    raw.start_time ?? null,
+      adminId:      Number(raw.admin.id),
+      adminUsername: raw.admin.username,
+      // Todos come from the dedicated todos endpoint
+      todos:        todosData.session   ?? [],
+      personalTodos: todosData.personal ?? [],
+      aiGenerated:  raw.ai_generated === true,
+      aiTodos:      todosData.ai        ?? [],
     }
-    rebuildMembers(session.value.invitedFriendIds)
+
+    allUsers.value = (friendsData.data ?? []).map(f => ({
+      id:     f.id,
+      name:   f.username,
+      avatar: f.avatar_url ?? null,
+    }))
+
+    sessionMembers.value = raw.members ?? []
+    rebuildMembersFromData(sessionMembers.value)
+
   } catch {
     router.replace("/host")
   } finally {
@@ -107,49 +111,57 @@ onMounted(async () => {
   }
 })
 
-// ================= INVITES (SOURCE OF TRUTH) =================
+// ================= INVITES =================
 const invitedIds = computed({
-  get: () => session.value?.invitedFriendIds ?? [],
+  get: () => sessionMembers.value.map(m => m.id),
   set: async (ids) => {
-  if (!session.value) return
-  const prev = session.value.invitedFriendIds
-  session.value.invitedFriendIds = ids
-  rebuildMembers(ids) // ✅ keep UI in sync immediately
-  try {
-    await apiUpdateSession(session.value.id, { invitedFriendIds: ids })
-  } catch (e) {
-    session.value.invitedFriendIds = prev
-    rebuildMembers(prev) // rollback
-    console.error(e)
-  }
-},
+    if (!session.value) return
+    const prevMembers = [...sessionMembers.value]
+
+    // Optimistic: build new member list from known user info
+    const newMembers = ids
+      .map(id => {
+        const info = userInfoById.value.get(id)
+        return info ? { id: info.id, username: info.name, avatar_url: info.avatar ?? null } : null
+      })
+      .filter(Boolean)
+
+    sessionMembers.value = newMembers
+    rebuildMembersFromData(newMembers)
+
+    try {
+      await api(`/api/sessions/${session.value.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ invited_ids: ids }),
+      })
+    } catch (e) {
+      sessionMembers.value = prevMembers
+      rebuildMembersFromData(prevMembers)
+      console.error(e)
+    }
+  },
 })
 
-
-// ================= MEMBERS (UI) =================
+// ================= MEMBERS (UI animation) =================
 const membersState = ref([])
-const nowElapsedSec = ref(0) 
+const nowElapsedSec = ref(0)
 
-function rebuildMembers(ids) {
+const STAGGER_SEC = 5
+
+function rebuildMembersFromData(memberObjects) {
   const prevById = new Map((membersState.value ?? []).map(m => [m.id, m]))
 
-  const next = (ids ?? [])
-    .map(id => userById(id))
-    .filter(Boolean)
-    .map(u => {
-      const old = prevById.get(u.id)
-      return {
-        id: u.id,
-        name: u.name,
-        avatar: u.avatar,
-        progress: old?.progress ?? 0,
-        startAtSec: old?.startAtSec ?? null, // ✅ persist start schedule
-      }
-    })
+  const next = (memberObjects ?? []).map(u => {
+    const old = prevById.get(u.id)
+    return {
+      id:         u.id,
+      name:       u.username ?? u.name,
+      avatar:     u.avatar_url ?? u.avatar ?? null,
+      progress:   old?.progress ?? 0,
+      startAtSec: old?.startAtSec ?? null,
+    }
+  })
 
-  // ✅ assign startAtSec ONLY for newly added members
-  // rule: new member should start after 5s from "first" => interpret as "5s from now"
-  // plus keep staggering if multiple new users are added at once
   const existingMaxStart = Math.max(
     -Infinity,
     ...next.map(m => (typeof m.startAtSec === "number" ? m.startAtSec : -Infinity))
@@ -158,7 +170,6 @@ function rebuildMembers(ids) {
   let k = 0
   for (const m of next) {
     if (typeof m.startAtSec !== "number") {
-      // start after 5 seconds from current moment, and stagger new ones
       const base = Math.max(existingMaxStart, nowElapsedSec.value) + STAGGER_SEC
       m.startAtSec = base + k * STAGGER_SEC
       k++
@@ -167,51 +178,50 @@ function rebuildMembers(ids) {
 
   membersState.value = next
 }
+
 const members = computed(() => membersState.value)
 
-
-
-// ================= TODOS (BACKEND SYNC) =================
-const aiTodos = computed({
-  get: () => session.value?.aiTodos ?? [],
-  set: async (v) => {
-    if (!session.value) return
-    const prev = session.value.aiTodos
-    session.value.aiTodos = v
-    try {
-      await apiUpdateSession(session.value.id, { ai_todos: v })
-    } catch (e) {
-      session.value.aiTodos = prev
-      console.error(e)
+// Options for AddPeopleModal: friends + current session members (deduplicated)
+// so that already-invited members always appear in the invited list
+const addPeopleOptions = computed(() => {
+  const map = new Map(allUsers.value.map(u => [u.id, u]))
+  sessionMembers.value.forEach(u => {
+    if (!map.has(u.id)) {
+      map.set(u.id, { id: u.id, name: u.username, avatar: u.avatar_url ?? null })
     }
-  },
+  })
+  return Array.from(map.values())
 })
 
+// ================= TODOS (local state — persistence lives in TodoDrawer) =================
 const sessionTodos = computed({
   get: () => session.value?.todos ?? [],
-  set: async (v) => {
-    if (!session.value) return
-    const prev = session.value.todos
-    session.value.todos = v
-    await persist(
-      { todos: v },
-      () => (session.value.todos = prev)
-    )
-  },
+  set: (v) => { if (session.value) session.value.todos = v },
 })
 
 const personalTodos = computed({
   get: () => session.value?.personalTodos ?? [],
-  set: async (v) => {
-    if (!session.value) return
-    const prev = session.value.personalTodos
-    session.value.personalTodos = v
-    await persist(
-      { personal_todos: v }, // backend key
-      () => (session.value.personalTodos = prev)
-    )
-  },
+  set: (v) => { if (session.value) session.value.personalTodos = v },
 })
+
+const aiTodos = computed({
+  get: () => session.value?.aiTodos ?? [],
+  set: (v) => { if (session.value) session.value.aiTodos = v },
+})
+
+// ================= END SESSION =================
+const endTriggered = ref(false)
+
+async function endAndExit() {
+  if (endTriggered.value || !session.value?.id) return
+  endTriggered.value = true
+  try {
+    // Backend determines outcome from todos — no body needed
+    await api(`/api/sessions/${session.value.id}/end`, { method: "POST" })
+  } catch (e) {
+    console.error(e)
+  }
+}
 
 // ================= TIMER =================
 const durationSec = computed(() => {
@@ -284,7 +294,6 @@ const timerStatsText = computed(() => {
   return `${fmt(p.elapsedSec)} / ${fmt(p.totalSec)}`
 })
 
-const STAGGER_SEC = 5
 function updateFriendsProgress(elapsedSec, totalSec) {
   if (!totalSec || totalSec <= 0) return
 
@@ -406,10 +415,10 @@ onBeforeRouteLeave(async () => {
       <div class="mx-auto flex max-w-screen-md items-center justify-between">
         <div class="flex min-w-0 items-center gap-2">
           <h1 class="truncate text-lg font-bold tracking-tight">{{ session.topic || "Session" }}</h1>
-          <div v-if="session.adminUsername === 'mario'" class="shrink-0 text-xs text-black/40">(admin)</div>
+          <div v-if="isAdmin" class="shrink-0 text-xs text-black/40">(admin)</div>
         </div>
         <button
-          v-if="session.adminUsername === 'mario'"
+          v-if="isAdmin"
           @click="openAddPeople"
           class="grid h-10 w-10 place-items-center rounded-full bg-white text-black shadow-sm ring-1 ring-black/10 transition hover:bg-[#F7FAF8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#57B884]"
           type="button"
@@ -458,7 +467,7 @@ onBeforeRouteLeave(async () => {
       v-model:open="todoOpen"
       v-model:mode="todoMode"
       :session-id="session.id"
-      :is-admin="session.adminUsername === 'mario'"
+      :is-admin="isAdmin"
       :is-private="session.privacy === 'private'"
       :is-generate="session.aiGenerated"
       v-model:session-todos="sessionTodos"
@@ -469,7 +478,7 @@ onBeforeRouteLeave(async () => {
 
     <AddPeopleModal
       v-model:open="addPeopleOpen"
-      :options="allUsers"
+      :options="addPeopleOptions"
       :model-value="invitedIds"
       v-model="invitedIds"
     />

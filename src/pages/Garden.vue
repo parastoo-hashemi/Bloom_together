@@ -1,9 +1,12 @@
 <script setup>
 import { computed, defineComponent, h, onMounted, ref } from "vue"
 
+import { useAuthStore } from "@/stores/auth.js"
 import { api } from "@/Api/http.js"
 import Header from "@/components/main/Header.vue"
 import NavBar from "@/components/main/NavBar.vue"
+
+const authStore = useAuthStore()
 
 const sessions = ref([])
 const loading = ref(false)
@@ -16,136 +19,52 @@ const tabs = [
   { key: "all", label: "All Time" },
 ]
 
+async function ensureToken() {
+  if (authStore.accessToken) return
+  try {
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: import.meta.env.VITE_DEV_USERNAME ?? "mario",
+        password: import.meta.env.VITE_DEV_PASSWORD ?? "12341234",
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      authStore.setAuth(data.user, data.accessToken)
+    }
+  } catch { /* backend unreachable */ }
+}
+
 async function loadSessions() {
   loading.value = true
   error.value = ""
 
+  await ensureToken()
+
   try {
-    sessions.value = await fetchCompletedSessions()
+    // GET /api/garden → { flowers_count, history: [{ id, topic, bloom_level, outcome, ended_at, session_id }] }
+    const { history } = await api("/api/garden")
+
+    sessions.value = (history ?? [])
+      .filter(f => f.outcome === "success")
+      .map(f => ({
+        id:             f.id,
+        topic:          f.topic?.trim() || "Study Session",
+        completedAt:    new Date(f.ended_at),
+        // bloom_level is 0–1; scale to 1–10 for the flower visual
+        tasksCompleted: Math.max(1, Math.round(Number(f.bloom_level) * 10)),
+      }))
+      .sort((a, b) => b.completedAt - a.completedAt)
+
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Failed to load garden"
     sessions.value = []
   } finally {
     loading.value = false
   }
-}
-
-async function fetchCompletedSessions() {
-  try {
-    const completedResponse = await api("/api/sessions/completed")
-    return normalizeCompletedPayload(completedResponse)
-  } catch {
-    const tableResponse = await api("/api/db/table/sessions")
-    return normalizeCompletedPayload(tableResponse)
-  }
-}
-
-function normalizeCompletedPayload(payload) {
-  const rows = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.data)
-      ? payload.data
-      : Array.isArray(payload?.rows)
-        ? payload.rows
-        : []
-
-  return rows
-    .filter(isCompletedSession)
-    .filter(isSuccessfulSession)
-    .map(normalizeSession)
-    .filter(Boolean)
-    .sort((a, b) => b.completedAt - a.completedAt)
-}
-
-function isCompletedSession(session) {
-  return Boolean(
-    session?.ended_at ??
-      session?.endedAt ??
-      session?.completed_at ??
-      session?.completedAt ??
-      session?.date
-  )
-}
-
-function isSuccessfulSession(session) {
-  const value =
-    session?.completion_success ??
-    session?.completionSuccess ??
-    session?.success ??
-    session?.completed_successfully ??
-    session?.completedSuccessfully
-
-  return value === true || value === 1 || value === "1"
-}
-
-function normalizeSession(session, index) {
-  const completedAt = getSessionCompletedAt(session)
-  if (!completedAt) return null
-
-  const todos = [
-    ...parseList(session.todos),
-    ...parseList(session.personal_todos ?? session.personalTodos),
-    ...parseList(session.ai_todos ?? session.aiTodos),
-  ]
-
-  return {
-    id: session.id ?? `${completedAt.getTime()}-${index}`,
-    topic: session.topic?.trim() || "Study Session",
-    completedAt,
-    tasksCompleted: getTasksCompleted(session, todos),
-  }
-}
-
-function getSessionCompletedAt(session) {
-  const raw =
-    session.ended_at ??
-    session.endedAt ??
-    session.completed_at ??
-    session.completedAt ??
-    session.date ??
-    session.start_time ??
-    session.startTime ??
-    session.createdAt
-
-  if (!raw) return null
-
-  const date = typeof raw === "number" ? new Date(raw) : new Date(raw)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function parseList(value) {
-  if (Array.isArray(value)) return value
-  if (!value) return []
-
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function isTodoDone(todo) {
-  if (typeof todo?.done === "boolean") return todo.done
-  if (typeof todo?.completed === "boolean") return todo.completed
-  return false
-}
-
-function getTasksCompleted(session, todos) {
-  const explicitCount =
-    session.tasksCompleted ??
-    session.tasks_completed ??
-    session.completedTasks ??
-    session.completed_tasks
-
-  if (explicitCount !== undefined) {
-    return Math.max(1, Number(explicitCount) || 1)
-  }
-
-  const doneCount = todos.filter(isTodoDone).length
-  if (doneCount > 0) return doneCount
-
-  return Math.max(1, todos.length || 1)
 }
 
 function startOfDay(date) {

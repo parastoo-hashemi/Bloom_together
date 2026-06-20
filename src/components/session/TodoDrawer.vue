@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue"
+import { api } from "@/Api/http.js"
 import ArrowLeft from "@/components/icons/ArrowLeft.vue"
 import TodoAddRow from "@/components/session/TodoAddRow.vue"
 import TodoListPanel from "@/components/session/TodoListPanel.vue"
@@ -83,120 +84,106 @@ const readOnlySessionTodos = computed(() => {
   return localSessionTodos.value
 })
 
-function commitTodos(next) {
-  if (props.mode !== "manual") return
-
-  if (props.isAdmin) {
-    if (manualScope.value === "session") emit("update:sessionTodos", next)
-    else emit("update:personalTodos", next)
-  } else {
-    emit("update:personalTodos", next)
-  }
-}
-
-const API_BASE = "http://localhost:3001"
-
-async function persistManualTodos(next) {
-  // decide which field we are editing
-  const isSessionScope = props.isAdmin && manualScope.value === "session"
-  const payload = isSessionScope
-    ? { todos: next }                 // session shared todos
-    : { personal_todos: next }        // personal todos
-
-  const r = await fetch(`${API_BASE}/api/sessions/${props.sessionId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  })
-
-  if (!r.ok) {
-    const text = await r.text().catch(() => "")
-    throw new Error(`Persist manual todos failed: ${r.status} ${text}`)
-  }
-}
-
+// Toggle a shared session task (visible to non-admin as read-only, but still toggleable)
 async function toggleSessionTaskDone(id) {
-  const next = localSessionTodos.value.map((x) =>
-    x.id === id ? { ...x, done: !x.done } : x
-  )
+  const todo = localSessionTodos.value.find(x => x.id === id)
+  if (!todo) return
 
+  const next = localSessionTodos.value.map(x => x.id === id ? { ...x, done: !x.done } : x)
   localSessionTodos.value = next
   emit("update:sessionTodos", next)
 
   try {
-    await persistSessionTodos(next)
+    await api(`/api/sessions/${props.sessionId}/todos/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ done: !todo.done }),
+    })
   } catch (e) {
+    // Revert
+    const reverted = localSessionTodos.value.map(x => x.id === id ? { ...x, done: todo.done } : x)
+    localSessionTodos.value = reverted
+    emit("update:sessionTodos", reverted)
     console.error(e)
   }
 }
-
-async function persistSessionTodos(next) {
-  const r = await fetch(`${API_BASE}/api/sessions/${props.sessionId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ todos: next }),
-  })
-
-  if (!r.ok) {
-    const text = await r.text().catch(() => "")
-    throw new Error(`Persist session todos failed: ${r.status} ${text}`)
-  }
-}
-
 
 async function addTask(text) {
   const t = text.trim()
   if (!t) return
 
-  const item = {
-    id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
-    text: t,
-    done: false,
-  }
+  const isSessionScope = props.isAdmin && manualScope.value === "session"
+  const scope = isSessionScope ? "session" : "personal"
 
-  const next = [item, ...activeTodos.value]
+  // Optimistic: show temp item immediately
+  const tempId = `temp-${Date.now()}`
+  const item = { id: tempId, text: t, done: false }
+  const next = [item, ...(isSessionScope ? localSessionTodos.value : localPersonalTodos.value)]
 
-  if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
-  else localPersonalTodos.value = next
-
-  commitTodos(next)
+  if (isSessionScope) { localSessionTodos.value = next; emit("update:sessionTodos", next) }
+  else { localPersonalTodos.value = next; emit("update:personalTodos", next) }
 
   try {
-    await persistManualTodos(next)
+    // POST /api/sessions/:id/todos → { id, text, done, scope, ... }
+    const created = await api(`/api/sessions/${props.sessionId}/todos`, {
+      method: "POST",
+      body: JSON.stringify({ text: t, scope }),
+    })
+
+    // Swap temp item for the real one (has a real UUID from the server)
+    const withReal = (isSessionScope ? localSessionTodos.value : localPersonalTodos.value)
+      .map(x => x.id === tempId ? created : x)
+    if (isSessionScope) { localSessionTodos.value = withReal; emit("update:sessionTodos", withReal) }
+    else { localPersonalTodos.value = withReal; emit("update:personalTodos", withReal) }
   } catch (e) {
+    // Revert
+    const reverted = (isSessionScope ? localSessionTodos.value : localPersonalTodos.value)
+      .filter(x => x.id !== tempId)
+    if (isSessionScope) { localSessionTodos.value = reverted; emit("update:sessionTodos", reverted) }
+    else { localPersonalTodos.value = reverted; emit("update:personalTodos", reverted) }
     console.error(e)
-    // optional: revert UI if you want strict consistency
   }
 }
-
 
 async function toggleDone(id) {
-  const next = activeTodos.value.map((x) => (x.id === id ? { ...x, done: !x.done } : x))
+  const isSessionScope = props.isAdmin && manualScope.value === "session"
+  const list = isSessionScope ? localSessionTodos.value : localPersonalTodos.value
+  const todo = list.find(x => x.id === id)
+  if (!todo) return
 
-  if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
-  else localPersonalTodos.value = next
-
-  commitTodos(next)
+  const next = list.map(x => x.id === id ? { ...x, done: !x.done } : x)
+  if (isSessionScope) { localSessionTodos.value = next; emit("update:sessionTodos", next) }
+  else { localPersonalTodos.value = next; emit("update:personalTodos", next) }
 
   try {
-    await persistManualTodos(next)
+    await api(`/api/sessions/${props.sessionId}/todos/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ done: !todo.done }),
+    })
   } catch (e) {
+    // Revert
+    const reverted = (isSessionScope ? localSessionTodos.value : localPersonalTodos.value)
+      .map(x => x.id === id ? { ...x, done: todo.done } : x)
+    if (isSessionScope) { localSessionTodos.value = reverted; emit("update:sessionTodos", reverted) }
+    else { localPersonalTodos.value = reverted; emit("update:personalTodos", reverted) }
     console.error(e)
   }
 }
 
-
 async function removeTask(id) {
-  const next = activeTodos.value.filter((x) => x.id !== id)
+  const isSessionScope = props.isAdmin && manualScope.value === "session"
+  const list = isSessionScope ? localSessionTodos.value : localPersonalTodos.value
+  const snapshot = [...list]
+  const next = list.filter(x => x.id !== id)
 
-  if (props.isAdmin && manualScope.value === "session") localSessionTodos.value = next
-  else localPersonalTodos.value = next
-
-  commitTodos(next)
+  if (isSessionScope) { localSessionTodos.value = next; emit("update:sessionTodos", next) }
+  else { localPersonalTodos.value = next; emit("update:personalTodos", next) }
 
   try {
-    await persistManualTodos(next)
+    await api(`/api/sessions/${props.sessionId}/todos/${id}`, { method: "DELETE" })
   } catch (e) {
+    // Revert
+    if (isSessionScope) { localSessionTodos.value = snapshot; emit("update:sessionTodos", snapshot) }
+    else { localPersonalTodos.value = snapshot; emit("update:personalTodos", snapshot) }
     console.error(e)
   }
 }
